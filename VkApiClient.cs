@@ -88,13 +88,14 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         CancellationToken cancellationToken,
         long? replyToMessageId = null,
         long? replyToConversationMessageId = null,
-        bool disableMentions = false)
+        bool disableMentions = false,
+        string? keyboard = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(attachment);
         return SendMessageAsync(
             peerId,
             message,
-            null,
+            keyboard,
             cancellationToken,
             replyToMessageId,
             replyToConversationMessageId,
@@ -107,7 +108,9 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         long messageId,
         string message,
         string? keyboard,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? attachment = null,
+        bool disableMentions = false)
     {
         var parameters = new Dictionary<string, string>
         {
@@ -120,6 +123,14 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         if (keyboard is not null)
         {
             parameters["keyboard"] = keyboard;
+        }
+        if (!string.IsNullOrWhiteSpace(attachment))
+        {
+            parameters["attachment"] = attachment;
+        }
+        if (disableMentions)
+        {
+            parameters["disable_mentions"] = "1";
         }
 
         return CallAsync("messages.edit", parameters, cancellationToken);
@@ -597,7 +608,9 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         string caption,
         CancellationToken cancellationToken,
         long? replyToMessageId = null,
-        long? replyToConversationMessageId = null)
+        long? replyToConversationMessageId = null,
+        string? keyboard = null,
+        bool disableMentions = false)
     {
         var uploadServer = await CallAsync("photos.getMessagesUploadServer", new Dictionary<string, string>
         {
@@ -668,6 +681,14 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
             ["access_token"] = accessToken,
             ["v"] = ApiVersion
         };
+        if (!string.IsNullOrWhiteSpace(keyboard))
+        {
+            parameters["keyboard"] = keyboard;
+        }
+        if (disableMentions)
+        {
+            parameters["disable_mentions"] = "1";
+        }
         if (peerId > 2_000_000_000 && replyToConversationMessageId is > 0)
         {
             parameters["forward"] = JsonSerializer.Serialize(new

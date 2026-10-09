@@ -46,10 +46,18 @@ public readonly record struct BotCommandContext(
         VkApiClient api,
         byte[] image,
         string caption,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? keyboard = null,
+        bool disableMentions = false)
     {
         return api.SendPhotoAsync(
-            PeerId, image, caption, cancellationToken, replyToConversationMessageId: ConversationMessageId);
+            PeerId,
+            image,
+            caption,
+            cancellationToken,
+            replyToConversationMessageId: ConversationMessageId,
+            keyboard: keyboard,
+            disableMentions: disableMentions);
     }
 
     public Task SendMessageWithAttachmentAsync(
@@ -58,7 +66,8 @@ public readonly record struct BotCommandContext(
         string attachment,
         CancellationToken cancellationToken,
         bool quoteCommand = true,
-        bool disableMentions = false)
+        bool disableMentions = false,
+        string? keyboard = null)
     {
         return api.SendMessageWithAttachmentAsync(
             PeerId,
@@ -66,7 +75,8 @@ public readonly record struct BotCommandContext(
             attachment,
             cancellationToken,
             replyToConversationMessageId: quoteCommand ? ConversationMessageId : null,
-            disableMentions: disableMentions);
+            disableMentions: disableMentions,
+            keyboard: keyboard);
     }
 
     public Task SendMessageWithKeyboardAsync(
