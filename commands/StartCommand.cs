@@ -5,6 +5,7 @@ public sealed class StartCommand(
     IReadOnlySet<long> administratorIds) : IBotCommand
 {
     public string Name => "/start";
+    public decimal MinimumRole => 6;
     public string Description => "Активировать чат-менеджера в беседе";
     public IReadOnlyCollection<string> Aliases =>
         new[] { "/старт", "/активировать", "/активация", "/включитьбота", "/activate", "/начать" };
@@ -41,7 +42,8 @@ public sealed class StartCommand(
         var keyboard = GameText.CreateCallbackKeyboard("Команды", "/help", "positive");
         await context.SendMessageWithKeyboardAsync(
             api,
-            $"Беседа была активирована [id{context.UserId}|пользователем].\nДля ознакомления команд вы можете написать - /help или нажать на кнопку.",
+            $"✅ Беседа активирована [id{context.UserId}|пользователем].\n\n" +
+            "Чтобы посмотреть команды, напишите /help или нажмите кнопку ниже.",
             keyboard,
             cancellationToken,
             quoteCommand: false);

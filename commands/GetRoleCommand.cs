@@ -6,6 +6,7 @@ public sealed class GetRoleCommand(PostgresStore store, IReadOnlySet<long> admin
 {
     public string Name => "/getrole";
     public string Description => "Показать информацию о должности пользователя";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases => new[] { "/гетроль", "/инфороль", "/checkrole", "/чекроль" };
 
     public async Task ExecuteAsync(

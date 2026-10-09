@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using MintChatManager.Optimization;
 
 namespace MintChatManager;
 
@@ -12,14 +13,14 @@ public sealed class LongPollBot(
 {
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        var updateChannel = Channel.CreateBounded<BotUpdate>(new BoundedChannelOptions(64)
+        var updateChannel = Channel.CreateBounded<BotUpdate>(
+            new BoundedChannelOptions(BotRuntimeTuning.UpdateQueueCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleWriter = true,
             SingleReader = false
         });
-        const int workerCount = 4;
-        var workers = Enumerable.Range(0, workerCount)
+        var workers = Enumerable.Range(0, BotRuntimeTuning.UpdateWorkerCount)
             .Select(_ => ProcessUpdatesAsync(updateChannel.Reader, cancellationToken))
             .ToArray();
 
@@ -123,7 +124,7 @@ public sealed class LongPollBot(
                     }
                     else
                     {
-                        await store.RecordMessageAsync(update.UserId, cancellationToken);
+                        await store.RecordMessageAsync(update.PeerId, update.UserId, cancellationToken);
                         statistics.RecordMessage();
                     }
 
@@ -145,6 +146,23 @@ public sealed class LongPollBot(
                 catch (Exception exception)
                 {
                     Console.Error.WriteLine($"Failed to handle VK update: {exception.Message}");
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        await api.SendMessageAsync(
+                            update.PeerId,
+                            "⚠️ Не удалось выполнить команду. Проверьте правильность команды и попробуйте позже.",
+                            cancellationToken,
+                            replyToConversationMessageId: update.ConversationMessageId);
+                    }
+                    catch (Exception sendException)
+                    {
+                        Console.Error.WriteLine($"Failed to notify about command error: {sendException.Message}");
+                    }
                 }
             }
         }
@@ -271,12 +289,19 @@ public sealed class LongPollBot(
                           parsedMessageId > 0
             ? parsedMessageId
             : null;
+        long? conversationMessageId = payload.TryGetProperty("conversation_message_id", out var cmid) &&
+                                      cmid.ValueKind == JsonValueKind.Number &&
+                                      cmid.TryGetInt64(out var parsedConversationMessageId) &&
+                                      parsedConversationMessageId > 0
+            ? parsedConversationMessageId
+            : null;
 
         return new BotUpdate(
             peerId.GetInt64(),
             userId.GetInt64(),
             messageId,
             command.GetString() ?? "",
+            ConversationMessageId: conversationMessageId,
             EventId: eventId.GetString());
     }
 }

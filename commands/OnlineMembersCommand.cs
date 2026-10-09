@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 
 namespace MintChatManager.Commands;
@@ -6,11 +5,11 @@ namespace MintChatManager.Commands;
 public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long> administratorIds) : IBotCommand
 {
     private const int PageSize = 15;
-    private static readonly TimeZoneInfo MoscowTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
-    private static readonly CultureInfo DateCulture = CultureInfo.InvariantCulture;
 
     public string Name => "/olist";
     public string Description => "Показать список участников беседы по статусу";
+    public decimal MinimumRole => 2;
+    public IReadOnlyCollection<string> Aliases => new[] { "/онлайн", "/олист", "/onlinelist" };
 
     public async Task ExecuteAsync(
         VkApiClient api,
@@ -129,9 +128,8 @@ public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long>
             return "время последнего посещения неизвестно";
         }
 
-        var localTime = TimeZoneInfo.ConvertTime(
-            DateTimeOffset.FromUnixTimeSeconds(unixTime.Value), MoscowTimeZone);
-        return $"был(а) {localTime.ToString("dd.MM.yyyy HH:mm", DateCulture)} МСК";
+        var localTime = DateTimeOffset.FromUnixTimeSeconds(unixTime.Value).ToOffset(TimeSpan.FromHours(3));
+        return $"был(а) {localTime:dd.MM.yyyy HH:mm} МСК";
     }
 
     private static string FormatPlatform(int platform) => platform switch

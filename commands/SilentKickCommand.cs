@@ -6,6 +6,7 @@ public sealed class SilentKickCommand(
 {
     public string Name => "/skick";
     public string Description => "Исключить участника без ответа в чате";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases => new[] { "/скик", "/тихийкик" };
 
     public async Task ExecuteAsync(

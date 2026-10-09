@@ -4,6 +4,7 @@ public sealed class UnbanCommand(PostgresStore store, IReadOnlySet<long> adminis
 {
     public string Name => "/unban";
     public string Description => "Снять блокировку участника беседы";
+    public decimal MinimumRole => 2;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/разбан", "/анбан", "/унбан", "/unb", "/разбанить", "/снятьбан", "/избана",

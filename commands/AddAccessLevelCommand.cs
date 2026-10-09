@@ -4,6 +4,7 @@ public sealed class AddAccessLevelCommand(PostgresStore store, IReadOnlySet<long
 {
     public string Name => "/addaccesslevel";
     public string Description => "Назначить уровень прав участнику беседы";
+    public decimal MinimumRole => 2;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/addlevel", "/setlevel", "/setaccesslevel", "/addaccess", "/выдатьуровень", "/выдатьправа"

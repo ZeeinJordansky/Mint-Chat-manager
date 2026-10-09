@@ -4,6 +4,7 @@ public sealed class BanCommand(PostgresStore store, IReadOnlySet<long> administr
 {
     public string Name => "/ban";
     public string Description => "Заблокировать участника в беседе";
+    public decimal MinimumRole => 2;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/бан", "/забанить", "/sban", "/сбан", "/тихийбан"

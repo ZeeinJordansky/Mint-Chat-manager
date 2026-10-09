@@ -4,6 +4,7 @@ public sealed class KickCommand(PostgresStore store, IReadOnlySet<long> administ
 {
     public string Name => "/kick";
     public string Description => "Исключить участника из беседы";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases =>
         new[] { "/кик", "/кикнуть", "/исключить", "/выгнать", "/к", "/k" };
 

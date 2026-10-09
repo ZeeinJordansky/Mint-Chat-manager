@@ -4,6 +4,7 @@ public sealed class MuteCommand(PostgresStore store, IReadOnlySet<long> administ
 {
     public string Name => "/mute";
     public string Description => "Запретить участнику писать в беседе на срок";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/мут", "/замутить", "/км", "/заглушить", "/мутить", "/датьмут", "/m",

@@ -4,6 +4,7 @@ public sealed class ClearCommand(PostgresStore store, IReadOnlySet<long> adminis
 {
     public string Name => "/clear";
     public string Description => "Удалить последние сообщения";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/клир", "/очистить", "/очистка", "/клиар", "/delmsg",

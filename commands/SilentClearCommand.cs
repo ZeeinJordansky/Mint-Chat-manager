@@ -4,6 +4,7 @@ public sealed class SilentClearCommand(PostgresStore store, IReadOnlySet<long> a
 {
     public string Name => "/sclear";
     public string Description => "Удалить сообщения без ответа бота";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases =>
         new[] { "/склир", "/тихийклир", "/сочистить", "/smclear", "/смклир", "/смклиар", "/тихийочистить" };
 

@@ -6,6 +6,7 @@ public sealed class UnpinCommand(
 {
     public string Name => "/unpin";
     public string Description => "Открепить сообщение в беседе";
+    public decimal MinimumRole => 4;
     public IReadOnlyCollection<string> Aliases => new[] { "/открепить", "/анпин", "/унпин", "/откр" };
 
     public async Task ExecuteAsync(

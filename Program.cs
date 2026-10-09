@@ -1,5 +1,6 @@
 using MintChatManager;
 using MintChatManager.Commands;
+using MintChatManager.Optimization;
 using Npgsql;
 
 LoadDotEnv();
@@ -57,7 +58,7 @@ var postgresConnectionString = new NpgsqlConnectionStringBuilder
     Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "mintchatmanager",
     Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "mintbot",
     Password = postgresPassword,
-    MaxPoolSize = 8
+    MaxPoolSize = BotRuntimeTuning.PostgreSqlMaxPoolSize
 }.ConnectionString;
 
 await using var dataSource = NpgsqlDataSource.Create(postgresConnectionString);
@@ -66,11 +67,11 @@ await store.InitializeAsync(CancellationToken.None);
 
 using var httpClient = new HttpClient(new SocketsHttpHandler
 {
-    MaxConnectionsPerServer = 8,
-    PooledConnectionLifetime = TimeSpan.FromMinutes(10)
+    MaxConnectionsPerServer = BotRuntimeTuning.HttpMaxConnectionsPerServer,
+    PooledConnectionLifetime = BotRuntimeTuning.HttpConnectionLifetime
 })
 {
-    Timeout = TimeSpan.FromSeconds(40)
+    Timeout = BotRuntimeTuning.HttpTimeout
 };
 var api = new VkApiClient(httpClient, accessToken, groupId);
 var statistics = new BotStatistics();
@@ -79,6 +80,15 @@ var commands = new List<IBotCommand>
     new PingCommand(),
     new IdCommand(),
     new StartCommand(store, adminIds),
+    new RulesCommand(store),
+    new InfoCommand(store),
+    new SetRulesCommand(store, adminIds),
+    new SetInfoCommand(store, adminIds),
+    new SettingsCommand(store, adminIds),
+    new SetNicknameCommand(store, adminIds),
+    new GetNicknameCommand(store, adminIds),
+    new RemoveNicknameCommand(store, adminIds),
+    new NicknameListCommand(store, adminIds),
     new ProfileCommand(store, adminIds),
     new ClearCommand(store, adminIds),
     new SilentClearCommand(store, adminIds),
@@ -91,6 +101,10 @@ var commands = new List<IBotCommand>
     new BanCommand(store, adminIds),
     new UnbanCommand(store, adminIds),
     new ListsCommand(store, adminIds),
+    new PurgeCommand(store, adminIds),
+    new ZovCommand(store, adminIds),
+    new ZovConfirmCommand(),
+    new ZovCancelCommand(),
     new OnlineMembersCommand(store, adminIds),
     new OfflineMembersCommand(store, adminIds),
     new AddAccessLevelCommand(store, adminIds),

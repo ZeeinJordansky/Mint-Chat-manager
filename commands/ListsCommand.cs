@@ -10,6 +10,7 @@ public sealed class ListsCommand(PostgresStore store, IReadOnlySet<long> adminis
 
     public string Name => "/lists";
     public string Description => "Открыть списки наказаний беседы";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases =>
         new[] { "/листы", "/списки", "/slists", "/list", "/спис", "/список", "/наказания" };
 

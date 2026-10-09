@@ -4,7 +4,7 @@ public sealed class PingCommand : IBotCommand
 {
     public string Name => "/ping";
     public string Description => "Проверить отклик бота";
-    public IReadOnlyCollection<string> Aliases => new[] { "/пинг" };
+    public IReadOnlyCollection<string> Aliases => new[] { "/пинг", "/пингг", "/pong", "/понг" };
 
     public Task ExecuteAsync(
         VkApiClient api,

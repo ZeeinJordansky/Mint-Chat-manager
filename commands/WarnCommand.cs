@@ -4,6 +4,7 @@ public sealed class WarnCommand(PostgresStore store, IReadOnlySet<long> administ
 {
     public string Name => "/warn";
     public string Description => "Выдать предупреждение участнику беседы";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases =>
         new[] { "/варн", "/пред", "/предупреждение", "/датьварн", "/выдатьварн", "/w" };
 

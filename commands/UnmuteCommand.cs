@@ -4,6 +4,7 @@ public sealed class UnmuteCommand(PostgresStore store, IReadOnlySet<long> admini
 {
     public string Name => "/unmute";
     public string Description => "Снять блокировку чата с участника";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/анмут", "/унмут", "/размут", "/снятьмут", "/разглушить", "/размутить", "/измута", "/unm"

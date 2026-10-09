@@ -7,7 +7,7 @@ public sealed class ProfileCommand(PostgresStore store, IReadOnlySet<long> admin
     public string Name => "/stats";
     public string Description => "Показать статистику пользователя";
     public IReadOnlyCollection<string> Aliases =>
-        new[] { "/стата", "/статистика", "/статс", "/stata", "/профиль", "/profile", "/я" };
+        new[] { "/стата", "/статистика", "/статс", "/stata", "/профиль", "/profile", "/я", "/си", "/систата" };
 
     public async Task ExecuteAsync(
         VkApiClient api,
@@ -31,18 +31,18 @@ public sealed class ProfileCommand(PostgresStore store, IReadOnlySet<long> admin
             return;
         }
 
-        var moscowTime = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(stats.LastSeenAt, "Europe/Moscow");
+        var lastActivity = stats.ChatLastActivityAt?.ToOffset(TimeSpan.FromHours(3));
         var message =
-            "┌─ 📊 Статистика пользователя\n" +
-            $"│ Пользователь: [id{stats.UserId}|профиль]\n" +
-            $"│ Должность: {BotRoleNames.GetDisplayName(stats.Role)}\n" +
-            $"│ Предупреждений: {stats.WarningCount}\n" +
-            $"│ Активная блокировка чата: {(stats.IsMuted ? "да" : "нет")}\n" +
-            $"│ Сообщений сегодня: {stats.MessagesToday.ToString("N0", CultureInfo.GetCultureInfo("ru-RU"))}\n" +
-            $"│ Сообщений за неделю: {stats.MessagesThisWeek.ToString("N0", CultureInfo.GetCultureInfo("ru-RU"))}\n" +
-            $"│ Сообщений всего: {stats.MessagesAllTime.ToString("N0", CultureInfo.GetCultureInfo("ru-RU"))}\n" +
-            $"│ Последняя активность: {moscowTime:dd.MM.yyyy HH:mm:ss} МСК\n" +
-            "└────────────────────────";
+            $"📊 Информация о пользователе [id{stats.UserId}|пользователе] в этой беседе\n\n" +
+            $"🆔 VK ID: {stats.UserId}\n" +
+            "✏️ Nick_Name: нету\n\n" +
+            $"🛡️ Уровень прав: {BotRoleNames.GetDisplayName(stats.Role)}\n\n" +
+            $"⚠️ Предупреждений: {stats.WarningCount}\n" +
+            $"🔇 Блокировка чата: {(stats.IsMuted ? "да" : "нет")}\n\n" +
+            $"💬 Сообщений в беседе (С/В): {stats.MessagesToday.ToString("N0", CultureInfo.GetCultureInfo("en-US"))}/" +
+            $"{stats.ChatMessagesAllTime.ToString("N0", CultureInfo.GetCultureInfo("en-US"))}\n\n" +
+            $"📅 В системе с: {stats.CreatedAt.ToOffset(TimeSpan.FromHours(3)):dd.MM.yyyy}\n" +
+            $"🕐 Последняя активность: {(lastActivity is null ? "Отсутствует" : $"{lastActivity:HH:mm:ss | dd.MM.yyyy} МСК")}";
 
         await context.SendMessageAsync(api, message, cancellationToken);
     }

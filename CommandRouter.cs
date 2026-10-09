@@ -4,6 +4,7 @@ public interface IBotCommand
 {
     string Name { get; }
     string Description { get; }
+    decimal MinimumRole => 0;
     IReadOnlyCollection<string> Aliases => Array.Empty<string>();
     Task ExecuteAsync(
         VkApiClient api,
@@ -190,6 +191,18 @@ public sealed class CommandRouter
         if (commands.TryGetValue(commandName, out var command))
         {
             Console.WriteLine($"Running {commandName} for peer {peerId}.");
+            if (command is IInternalBotCommand && !isCallback)
+            {
+                await new BotCommandContext(
+                        peerId, userId, messageId, replyToUserId, replyToConversationMessageId, conversationMessageId,
+                        commandName, isCallback)
+                    .SendMessageAsync(
+                        api,
+                        "Эта служебная команда доступна только через кнопку в сообщении бота.",
+                        cancellationToken);
+                return;
+            }
+
             if (chatSettings is { IsActive: false } && command.Name is not ("/start" or "/help"))
             {
                 await new BotCommandContext(

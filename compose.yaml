@@ -16,6 +16,18 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+  bot:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file:
+      - Configuration/.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:

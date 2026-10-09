@@ -1,10 +1,12 @@
 using System.Text.Json;
+using MintChatManager.Optimization;
 
 namespace MintChatManager;
 
 public sealed class VkApiClient(HttpClient httpClient, string accessToken, long? groupId = null)
 {
     private const string ApiVersion = "5.199";
+    private readonly VkSubjectNameCache subjectNameCache = new();
 
     public Task<JsonElement> GetLongPollServerAsync(long groupId, CancellationToken cancellationToken)
     {
@@ -172,6 +174,11 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
 
     public async Task<string?> GetSubjectNameAsync(long subjectId, CancellationToken cancellationToken)
     {
+        if (subjectNameCache.TryGet(subjectId, out var cachedName))
+        {
+            return cachedName;
+        }
+
         var isCommunity = subjectId < 0;
         var result = await CallAsync(
             isCommunity ? "groups.getById" : "users.get",
@@ -206,15 +213,28 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         var subject = subjects[0];
         if (isCommunity)
         {
-            return subject.TryGetProperty("name", out var groupName) && groupName.ValueKind == JsonValueKind.String
-                ? groupName.GetString()
+            var groupName = subject.TryGetProperty("name", out var nameValue) &&
+                            nameValue.ValueKind == JsonValueKind.String
+                ? nameValue.GetString()
                 : null;
+            if (!string.IsNullOrWhiteSpace(groupName))
+            {
+                subjectNameCache.Set(subjectId, groupName);
+            }
+
+            return groupName;
         }
 
         var firstName = subject.TryGetProperty("first_name", out var first) ? first.GetString() : null;
         var lastName = subject.TryGetProperty("last_name", out var last) ? last.GetString() : null;
         var fullName = string.Join(' ', new[] { firstName, lastName }.Where(name => !string.IsNullOrWhiteSpace(name)));
-        return string.IsNullOrWhiteSpace(fullName) ? null : fullName;
+        if (string.IsNullOrWhiteSpace(fullName))
+        {
+            return null;
+        }
+
+        subjectNameCache.Set(subjectId, fullName);
+        return fullName;
     }
 
     public async Task<IReadOnlyList<VkHistoryMessage>> GetRecentMessagesAsync(
@@ -241,7 +261,10 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
                            fromId.TryGetInt64(out _))
             .Select(item => new VkHistoryMessage(
                 item.GetProperty("conversation_message_id").GetInt64(),
-                item.GetProperty("from_id").GetInt64()))
+                item.GetProperty("from_id").GetInt64(),
+                item.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String
+                    ? text.GetString() ?? ""
+                    : ""))
             .ToArray();
     }
 
@@ -605,7 +628,7 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
 }
 
 public sealed record VkConversationInfo(long PeerId, string Title, int MemberCount, long OwnerId);
-public sealed record VkHistoryMessage(long ConversationMessageId, long FromId);
+public sealed record VkHistoryMessage(long ConversationMessageId, long FromId, string Text);
 
 public sealed record VkConversationMember(
     long UserId,

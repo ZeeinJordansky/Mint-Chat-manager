@@ -4,6 +4,7 @@ public sealed class RemoveRoleCommand(PostgresStore store, IReadOnlySet<long> ad
 {
     public string Name => "/removerole";
     public string Description => "Снять уровень прав у участника";
+    public decimal MinimumRole => 1;
     public IReadOnlyCollection<string> Aliases => new[]
     {
         "/rrole", "/delrole", "/dellevel", "/removeaccesslevel", "/rlevel", "/removelevel",

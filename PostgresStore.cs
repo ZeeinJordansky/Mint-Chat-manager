@@ -304,7 +304,7 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
             reader.GetInt16(5),
             reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6));
 
-    public async Task RecordMessageAsync(long userId, CancellationToken cancellationToken)
+    public async Task RecordMessageAsync(long peerId, long userId, CancellationToken cancellationToken)
     {
         const string sql = """
             WITH updated_profile AS (
@@ -314,14 +314,23 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
                 SET messages_count = user_profiles.messages_count + 1,
                     last_seen_at = NOW()
                 RETURNING user_id
+            ), updated_daily AS (
+                INSERT INTO user_daily_messages (peer_id, user_id, message_date, messages_count)
+                SELECT @peer_id, user_id, (NOW() AT TIME ZONE 'Europe/Moscow')::date, 1
+                FROM updated_profile
+                ON CONFLICT (peer_id, user_id, message_date) DO UPDATE
+                SET messages_count = user_daily_messages.messages_count + 1
+                RETURNING user_id
             )
-            INSERT INTO user_daily_messages (user_id, message_date, messages_count)
-            SELECT user_id, (NOW() AT TIME ZONE 'Europe/Moscow')::date, 1 FROM updated_profile
-            ON CONFLICT (user_id, message_date) DO UPDATE
-            SET messages_count = user_daily_messages.messages_count + 1;
+            INSERT INTO chat_message_totals (peer_id, user_id, message_count, last_message_at)
+            SELECT @peer_id, user_id, 1, NOW() FROM updated_daily
+            ON CONFLICT (peer_id, user_id) DO UPDATE
+            SET message_count = chat_message_totals.message_count + 1,
+                last_message_at = NOW();
             """;
 
         await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
         command.Parameters.AddWithValue("user_id", userId);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -356,6 +365,7 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
         IReadOnlySet<long> administratorIds,
         CancellationToken cancellationToken)
     {
+        await EnsureProfileAsync(userId, cancellationToken);
         var profile = await GetProfileAsync(userId, cancellationToken);
         if (profile is null)
         {
@@ -365,11 +375,15 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
         const string sql = """
             SELECT
                 COALESCE((SELECT messages_count FROM user_daily_messages
-                          WHERE user_id = @user_id
+                          WHERE peer_id = @peer_id AND user_id = @user_id
                             AND message_date = (NOW() AT TIME ZONE 'Europe/Moscow')::date), 0),
-                COALESCE((SELECT SUM(messages_count) FROM user_daily_messages
-                          WHERE user_id = @user_id
+                COALESCE((SELECT SUM(messages_count)::bigint FROM user_daily_messages
+                          WHERE peer_id = @peer_id AND user_id = @user_id
                             AND message_date >= (NOW() AT TIME ZONE 'Europe/Moscow')::date - 6), 0),
+                COALESCE((SELECT message_count FROM chat_message_totals
+                          WHERE peer_id = @peer_id AND user_id = @user_id), 0),
+                (SELECT last_message_at FROM chat_message_totals
+                 WHERE peer_id = @peer_id AND user_id = @user_id),
                 (SELECT COUNT(*)::int FROM moderation_actions
                  WHERE peer_id = @peer_id AND target_id = @user_id
                    AND action_type = 'warn' AND active),
@@ -390,14 +404,15 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
 
         var role = administratorIds.Contains(userId)
             ? 12m
-            : Math.Max(profile.GlobalRole, reader.GetDecimal(4));
+            : Math.Max(profile.GlobalRole, reader.GetDecimal(6));
         return new UserStatistics(
             userId,
             reader.GetInt64(0),
             reader.GetInt64(1),
-            profile.MessagesCount,
-            reader.GetInt32(2),
-            reader.GetBoolean(3),
+            reader.GetInt64(2),
+            reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+            reader.GetInt32(4),
+            reader.GetBoolean(5),
             role,
             profile.CreatedAt,
             profile.LastSeenAt);
@@ -730,6 +745,105 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
         return staff;
     }
 
+    public async Task SetChatNicknameAsync(
+        long peerId,
+        long userId,
+        string nickname,
+        long setBy,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            INSERT INTO chat_nicknames (peer_id, user_id, nickname, set_by)
+            VALUES (@peer_id, @user_id, @nickname, @set_by)
+            ON CONFLICT (peer_id, user_id) DO UPDATE
+            SET nickname = EXCLUDED.nickname, set_by = EXCLUDED.set_by, updated_at = NOW();
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("nickname", nickname);
+        command.Parameters.AddWithValue("set_by", setBy);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<ChatNickname?> GetChatNicknameAsync(
+        long peerId,
+        long userId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT nickname, set_by, updated_at
+            FROM chat_nicknames
+            WHERE peer_id = @peer_id AND user_id = @user_id;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
+        command.Parameters.AddWithValue("user_id", userId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? new ChatNickname(
+                userId,
+                reader.GetString(0),
+                reader.GetInt64(1),
+                reader.GetFieldValue<DateTimeOffset>(2))
+            : null;
+    }
+
+    public async Task<bool> RemoveChatNicknameAsync(
+        long peerId,
+        long userId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = "DELETE FROM chat_nicknames WHERE peer_id = @peer_id AND user_id = @user_id;";
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
+        command.Parameters.AddWithValue("user_id", userId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
+
+    public async Task<ChatNicknamePage> GetChatNicknamesAsync(
+        long peerId,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            WITH page AS (
+                SELECT user_id, nickname, set_by, updated_at
+                FROM chat_nicknames
+                WHERE peer_id = @peer_id
+                ORDER BY nickname, user_id
+                LIMIT @limit OFFSET @offset
+            )
+            SELECT (SELECT COUNT(*) FROM chat_nicknames WHERE peer_id = @peer_id),
+                   page.user_id, page.nickname, page.set_by, page.updated_at
+            FROM (SELECT 1) AS anchor
+            LEFT JOIN page ON TRUE
+            ORDER BY page.nickname NULLS LAST, page.user_id NULLS LAST;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
+        command.Parameters.AddWithValue("limit", limit);
+        command.Parameters.AddWithValue("offset", offset);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var nicknames = new List<ChatNickname>(limit);
+        long total = 0;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            total = reader.GetInt64(0);
+            if (!reader.IsDBNull(1))
+            {
+                nicknames.Add(new ChatNickname(
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3),
+                    reader.GetFieldValue<DateTimeOffset>(4)));
+            }
+        }
+
+        return new ChatNicknamePage(total, nicknames);
+    }
+
     public async Task<RoleAssignment?> GetRoleAssignmentAsync(
         long peerId,
         long userId,
@@ -935,6 +1049,14 @@ public sealed record ModerationStatus(int WarningCount, bool IsMuted, bool IsBan
 
 public sealed record ChatStaffMember(long UserId, decimal Role);
 
+public sealed record ChatNickname(
+    long UserId,
+    string Nickname,
+    long SetBy,
+    DateTimeOffset UpdatedAt);
+
+public sealed record ChatNicknamePage(long TotalCount, IReadOnlyList<ChatNickname> Nicknames);
+
 public sealed record RoleAssignment(
     long UserId,
     decimal GlobalRole,
@@ -953,7 +1075,8 @@ public sealed record UserStatistics(
     long UserId,
     long MessagesToday,
     long MessagesThisWeek,
-    long MessagesAllTime,
+    long ChatMessagesAllTime,
+    DateTimeOffset? ChatLastActivityAt,
     int WarningCount,
     bool IsMuted,
     decimal Role,

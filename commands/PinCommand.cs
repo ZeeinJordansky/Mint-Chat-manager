@@ -6,6 +6,7 @@ public sealed class PinCommand(
 {
     public string Name => "/pin";
     public string Description => "Закрепить сообщение в беседе";
+    public decimal MinimumRole => 4;
     public IReadOnlyCollection<string> Aliases => new[] { "/пин", "/закр", "/закрепить" };
 
     public async Task ExecuteAsync(
