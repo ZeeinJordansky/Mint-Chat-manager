@@ -72,13 +72,16 @@ using var httpClient = new HttpClient(new SocketsHttpHandler
 {
     Timeout = TimeSpan.FromSeconds(40)
 };
-var api = new VkApiClient(httpClient, accessToken);
+var api = new VkApiClient(httpClient, accessToken, groupId);
 var statistics = new BotStatistics();
 var commands = new List<IBotCommand>
 {
     new PingCommand(),
     new IdCommand(),
+    new StartCommand(store, adminIds),
     new ProfileCommand(store, adminIds),
+    new ClearCommand(store, adminIds),
+    new SilentClearCommand(store, adminIds),
     new WarnCommand(store, adminIds),
     new UnwarnCommand(store, adminIds),
     new MuteCommand(store, adminIds),
@@ -88,6 +91,8 @@ var commands = new List<IBotCommand>
     new BanCommand(store, adminIds),
     new UnbanCommand(store, adminIds),
     new ListsCommand(store, adminIds),
+    new OnlineMembersCommand(store, adminIds),
+    new OfflineMembersCommand(store, adminIds),
     new AddAccessLevelCommand(store, adminIds),
     new RemoveRoleCommand(store, adminIds),
     new StaffListCommand(store),

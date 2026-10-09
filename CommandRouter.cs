@@ -21,11 +21,22 @@ public readonly record struct BotCommandContext(
     long UserId,
     long? MessageId,
     long? ReplyToUserId = null,
-    long? ReplyToConversationMessageId = null)
+    long? ReplyToConversationMessageId = null,
+    long? ConversationMessageId = null,
+    string CommandName = "",
+    bool IsCallback = false)
 {
-    public Task SendMessageAsync(VkApiClient api, string message, CancellationToken cancellationToken)
+    public Task SendMessageAsync(
+        VkApiClient api,
+        string message,
+        CancellationToken cancellationToken,
+        bool quoteCommand = true)
     {
-        return api.SendMessageAsync(PeerId, message, cancellationToken, MessageId);
+        return api.SendMessageAsync(
+            PeerId,
+            message,
+            cancellationToken,
+            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null);
     }
 
     public Task SendPhotoAsync(
@@ -34,16 +45,23 @@ public readonly record struct BotCommandContext(
         string caption,
         CancellationToken cancellationToken)
     {
-        return api.SendPhotoAsync(PeerId, image, caption, cancellationToken, MessageId);
+        return api.SendPhotoAsync(
+            PeerId, image, caption, cancellationToken, replyToConversationMessageId: ConversationMessageId);
     }
 
     public Task SendMessageWithKeyboardAsync(
         VkApiClient api,
         string message,
         string keyboard,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool quoteCommand = true)
     {
-        return api.SendMessageWithKeyboardAsync(PeerId, message, keyboard, cancellationToken, MessageId);
+        return api.SendMessageWithKeyboardAsync(
+            PeerId,
+            message,
+            keyboard,
+            cancellationToken,
+            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null);
     }
 
     public Task EditMessageAsync(
@@ -110,6 +128,8 @@ public sealed class CommandRouter
         long? messageId,
         long? replyToUserId,
         long? replyToConversationMessageId,
+        long? conversationMessageId,
+        bool isCallback,
         string text,
         CancellationToken cancellationToken)
     {
@@ -172,7 +192,9 @@ public sealed class CommandRouter
             Console.WriteLine($"Running {commandName} for peer {peerId}.");
             if (chatSettings is { IsActive: false } && command.Name is not ("/start" or "/help"))
             {
-                await new BotCommandContext(peerId, userId, messageId, replyToUserId, replyToConversationMessageId)
+                await new BotCommandContext(
+                        peerId, userId, messageId, replyToUserId, replyToConversationMessageId, conversationMessageId,
+                        commandName, isCallback)
                     .SendMessageAsync(
                         api,
                         "Бот в этой беседе ещё не активирован. Владелец беседы может включить его командой /start.",
@@ -183,7 +205,9 @@ public sealed class CommandRouter
             statistics.RecordCommand();
             await command.ExecuteAsync(
                 api,
-                new BotCommandContext(peerId, userId, messageId, replyToUserId, replyToConversationMessageId),
+                new BotCommandContext(
+                    peerId, userId, messageId, replyToUserId, replyToConversationMessageId, conversationMessageId,
+                    commandName, isCallback),
                 separator < 0 ? "" : commandText[(separator + 1)..].TrimStart().ToString(),
                 cancellationToken);
         }

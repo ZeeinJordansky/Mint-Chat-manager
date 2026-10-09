@@ -4,7 +4,10 @@ public sealed class BanCommand(PostgresStore store, IReadOnlySet<long> administr
 {
     public string Name => "/ban";
     public string Description => "Заблокировать участника в беседе";
-    public IReadOnlyCollection<string> Aliases => new[] { "/бан", "/забанить" };
+    public IReadOnlyCollection<string> Aliases => new[]
+    {
+        "/бан", "/забанить", "/sban", "/сбан", "/тихийбан"
+    };
 
     public async Task ExecuteAsync(
         VkApiClient api,
@@ -55,6 +58,11 @@ public sealed class BanCommand(PostgresStore store, IReadOnlySet<long> administr
         await api.RemoveChatUserAsync(context.PeerId, targetId.Value, cancellationToken);
         await store.AddModerationActionAsync(
             context.PeerId, context.UserId, targetId.Value, "ban", reason, duration, cancellationToken);
+
+        if (context.CommandName is "/sban" or "/сбан" or "/тихийбан")
+        {
+            return;
+        }
 
         var keyboard = GameText.CreateCallbackKeyboard(
             "Снять блокировку",

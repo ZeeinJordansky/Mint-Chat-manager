@@ -54,12 +54,12 @@ public sealed class ListsCommand(PostgresStore store, IReadOnlySet<long> adminis
             }.Concat(role > 2
                 ? new[] { new[] { CreateButton("С блокировкой", "/lists bans 1", "secondary") } }
                 : Array.Empty<Button[]>()).ToArray());
-            await api.SendMessageWithKeyboardAsync(
-                context.PeerId,
+            await SendListAsync(
+                api,
+                context,
                 "...::Список пользователей с наказаниями::...\n\nУкажите категорию:",
                 mainKeyboard,
-                cancellationToken,
-                context.MessageId);
+                cancellationToken);
             return;
         }
 
@@ -153,13 +153,23 @@ public sealed class ListsCommand(PostgresStore store, IReadOnlySet<long> adminis
         }
         buttons.Add(new[] { CreateButton("Назад", "/lists main", "negative") });
         var keyboard = CreateKeyboard(buttons.ToArray());
-        await api.SendMessageWithKeyboardAsync(
-            context.PeerId,
+        await SendListAsync(
+            api,
+            context,
             text,
             keyboard,
-            cancellationToken,
-            context.MessageId);
+            cancellationToken);
     }
+
+    private static Task SendListAsync(
+        VkApiClient api,
+        BotCommandContext context,
+        string text,
+        string keyboard,
+        CancellationToken cancellationToken) =>
+        context.IsCallback
+            ? context.EditMessageAsync(api, text, keyboard, cancellationToken)
+            : context.SendMessageWithKeyboardAsync(api, text, keyboard, cancellationToken);
 
     private static Button CreateButton(string label, string command, string color) =>
         new(label, command, color);

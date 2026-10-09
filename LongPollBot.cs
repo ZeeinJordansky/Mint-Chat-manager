@@ -133,6 +133,8 @@ public sealed class LongPollBot(
                         update.MessageId,
                         update.ReplyToUserId,
                         update.ReplyToConversationMessageId,
+                        update.ConversationMessageId,
+                        update.EventId is not null,
                         update.Text,
                         cancellationToken);
                 }
@@ -200,6 +202,12 @@ public sealed class LongPollBot(
                           parsedMessageId > 0
             ? parsedMessageId
             : null;
+        long? conversationMessageId = payload.TryGetProperty("conversation_message_id", out var cmid) &&
+                                      cmid.ValueKind == JsonValueKind.Number &&
+                                      cmid.TryGetInt64(out var parsedCmid) &&
+                                      parsedCmid > 0
+            ? parsedCmid
+            : null;
 
         long? replyToUserId = null;
         long? replyToConversationMessageId = null;
@@ -238,7 +246,8 @@ public sealed class LongPollBot(
             messageId,
             text.GetString() ?? "",
             replyToUserId,
-            replyToConversationMessageId);
+            replyToConversationMessageId,
+            conversationMessageId);
     }
 
     private static BotUpdate? ParseCallbackUpdate(JsonElement payload)
@@ -279,4 +288,5 @@ internal readonly record struct BotUpdate(
     string Text,
     long? ReplyToUserId = null,
     long? ReplyToConversationMessageId = null,
+    long? ConversationMessageId = null,
     string? EventId = null);

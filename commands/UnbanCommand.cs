@@ -6,7 +6,8 @@ public sealed class UnbanCommand(PostgresStore store, IReadOnlySet<long> adminis
     public string Description => "Снять блокировку участника беседы";
     public IReadOnlyCollection<string> Aliases => new[]
     {
-        "/разбан", "/анбан", "/унбан", "/unb", "/разбанить", "/избана"
+        "/разбан", "/анбан", "/унбан", "/unb", "/разбанить", "/снятьбан", "/избана",
+        "/sunban", "/сунбан", "/тихийразбан"
     };
 
     public async Task ExecuteAsync(
@@ -49,6 +50,11 @@ public sealed class UnbanCommand(PostgresStore store, IReadOnlySet<long> adminis
         }
 
         await store.ClearModerationActionAsync(context.PeerId, targetId.Value, "ban", cancellationToken);
+        if (context.CommandName is "/sunban" or "/сунбан" or "/тихийразбан")
+        {
+            return;
+        }
+
         await context.SendMessageAsync(
             api,
             $"🔓 {ModerationCommandAccess.FormatMention(targetId.Value, "Пользователю")} снята блокировка " +

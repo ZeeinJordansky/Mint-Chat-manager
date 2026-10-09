@@ -6,7 +6,8 @@ public sealed class MuteCommand(PostgresStore store, IReadOnlySet<long> administ
     public string Description => "Запретить участнику писать в беседе на срок";
     public IReadOnlyCollection<string> Aliases => new[]
     {
-        "/мут", "/заглушить", "/замутить", "/мутить", "/датьмут", "/m"
+        "/мут", "/замутить", "/км", "/заглушить", "/мутить", "/датьмут", "/m",
+        "/smute", "/смут", "/тихиймут"
     };
 
     public async Task ExecuteAsync(
@@ -53,6 +54,11 @@ public sealed class MuteCommand(PostgresStore store, IReadOnlySet<long> administ
             context.PeerId, targetId.Value, checked((int)duration.TotalSeconds), "ro", cancellationToken);
         await store.AddModerationActionAsync(
             context.PeerId, context.UserId, targetId.Value, "mute", reason, duration, cancellationToken);
+
+        if (context.CommandName is "/smute" or "/смут" or "/тихиймут")
+        {
+            return;
+        }
 
         var message =
             $"🔇 {ModerationCommandAccess.FormatMention(targetId.Value, "Пользователю")} выдана блокировка чата сроком на {display} " +

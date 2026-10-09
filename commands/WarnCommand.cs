@@ -4,7 +4,8 @@ public sealed class WarnCommand(PostgresStore store, IReadOnlySet<long> administ
 {
     public string Name => "/warn";
     public string Description => "Выдать предупреждение участнику беседы";
-    public IReadOnlyCollection<string> Aliases => new[] { "/варн", "/пред", "/предупреждение" };
+    public IReadOnlyCollection<string> Aliases =>
+        new[] { "/варн", "/пред", "/предупреждение", "/датьварн", "/выдатьварн", "/w" };
 
     public async Task ExecuteAsync(
         VkApiClient api,

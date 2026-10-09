@@ -6,7 +6,8 @@ public sealed class UnwarnCommand(PostgresStore store, IReadOnlySet<long> admini
     public string Description => "Снять последнее предупреждение участника";
     public IReadOnlyCollection<string> Aliases => new[]
     {
-        "/анварн", "/снятьварн", "/снятьпредупреждение", "/снятьпред", "/анпред", "/удалитьварн", "/unw"
+        "/анварн", "/разварн", "/унварн", "/снятьварн", "/снятьпредупреждение",
+        "/снятьпред", "/анпред", "/удалитьварн", "/unw"
     };
 
     public async Task ExecuteAsync(

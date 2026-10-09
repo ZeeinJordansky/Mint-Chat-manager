@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace MintChatManager;
 
-public sealed class VkApiClient(HttpClient httpClient, string accessToken)
+public sealed class VkApiClient(HttpClient httpClient, string accessToken, long? groupId = null)
 {
     private const string ApiVersion = "5.199";
 
@@ -50,9 +50,10 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
         long peerId,
         string message,
         CancellationToken cancellationToken,
-        long? replyToMessageId = null)
+        long? replyToMessageId = null,
+        long? replyToConversationMessageId = null)
     {
-        return SendMessageAsync(peerId, message, null, cancellationToken, replyToMessageId);
+        return SendMessageAsync(peerId, message, null, cancellationToken, replyToMessageId, replyToConversationMessageId);
     }
 
     public Task SendMessageWithKeyboardAsync(
@@ -60,9 +61,11 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
         string message,
         string keyboard,
         CancellationToken cancellationToken,
-        long? replyToMessageId = null)
+        long? replyToMessageId = null,
+        long? replyToConversationMessageId = null)
     {
-        return SendMessageAsync(peerId, message, keyboard, cancellationToken, replyToMessageId);
+        return SendMessageAsync(
+            peerId, message, keyboard, cancellationToken, replyToMessageId, replyToConversationMessageId);
     }
 
     public Task EditMessageAsync(
@@ -167,6 +170,121 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
         return ownerId.GetInt64();
     }
 
+    public async Task<string?> GetSubjectNameAsync(long subjectId, CancellationToken cancellationToken)
+    {
+        var isCommunity = subjectId < 0;
+        var result = await CallAsync(
+            isCommunity ? "groups.getById" : "users.get",
+            new Dictionary<string, string>
+            {
+                [isCommunity ? "group_id" : "user_ids"] = Math.Abs(subjectId).ToString(),
+                ["access_token"] = accessToken,
+                ["v"] = ApiVersion
+            },
+            cancellationToken);
+        JsonElement subjects;
+        if (result.ValueKind == JsonValueKind.Array)
+        {
+            subjects = result;
+        }
+        else if (isCommunity &&
+                 result.TryGetProperty("groups", out var groups) &&
+                 groups.ValueKind == JsonValueKind.Array)
+        {
+            subjects = groups;
+        }
+        else
+        {
+            return null;
+        }
+
+        if (subjects.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var subject = subjects[0];
+        if (isCommunity)
+        {
+            return subject.TryGetProperty("name", out var groupName) && groupName.ValueKind == JsonValueKind.String
+                ? groupName.GetString()
+                : null;
+        }
+
+        var firstName = subject.TryGetProperty("first_name", out var first) ? first.GetString() : null;
+        var lastName = subject.TryGetProperty("last_name", out var last) ? last.GetString() : null;
+        var fullName = string.Join(' ', new[] { firstName, lastName }.Where(name => !string.IsNullOrWhiteSpace(name)));
+        return string.IsNullOrWhiteSpace(fullName) ? null : fullName;
+    }
+
+    public async Task<IReadOnlyList<VkHistoryMessage>> GetRecentMessagesAsync(
+        long peerId,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var response = await CallAsync("messages.getHistory", new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["count"] = count.ToString(),
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        }, cancellationToken);
+        if (!response.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException($"VK did not return message history for peer {peerId}.");
+        }
+
+        return items.EnumerateArray()
+            .Where(item => item.TryGetProperty("conversation_message_id", out var cmid) &&
+                           cmid.TryGetInt64(out _) &&
+                           item.TryGetProperty("from_id", out var fromId) &&
+                           fromId.TryGetInt64(out _))
+            .Select(item => new VkHistoryMessage(
+                item.GetProperty("conversation_message_id").GetInt64(),
+                item.GetProperty("from_id").GetInt64()))
+            .ToArray();
+    }
+
+    public async Task<int> DeleteConversationMessagesAsync(
+        long peerId,
+        IReadOnlyCollection<long> conversationMessageIds,
+        CancellationToken cancellationToken)
+    {
+        if (conversationMessageIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var parameters = new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["conversation_message_ids"] = string.Join(',', conversationMessageIds),
+            ["delete_for_all"] = "1",
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        };
+        if (groupId is > 0)
+        {
+            parameters["group_id"] = groupId.Value.ToString();
+        }
+
+        var response = await CallAsync("messages.delete", parameters, cancellationToken);
+        if (response.ValueKind == JsonValueKind.Number)
+        {
+            return Math.Min(response.GetInt32(), conversationMessageIds.Count);
+        }
+
+        if (response.ValueKind == JsonValueKind.Object)
+        {
+            return (int)response.EnumerateObject()
+                .Count(property => property.Value.ValueKind == JsonValueKind.True ||
+                                   property.Value.ValueKind == JsonValueKind.Number &&
+                                   property.Value.TryGetInt32(out var value) && value == 1);
+        }
+
+        throw new InvalidOperationException("VK returned an unrecognized response after deleting messages.");
+    }
+
     public async Task<VkConversationInfo> GetConversationInfoAsync(long peerId, CancellationToken cancellationToken)
     {
         var conversations = await CallAsync("messages.getConversationsById", new Dictionary<string, string>
@@ -269,12 +387,20 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
                                platformValue.TryGetInt32(out var parsedPlatform)
                     ? parsedPlatform
                     : 0;
-                var hasLastSeen = profile.ValueKind == JsonValueKind.Object &&
-                                  profile.TryGetProperty("last_seen", out var seenValue) &&
-                                  seenValue.ValueKind == JsonValueKind.Object &&
-                                  seenValue.TryGetProperty("time", out var seenTime) &&
-                                  seenTime.TryGetInt64(out var parsedSeenTime) &&
-                                  parsedSeenTime > 0;
+                long? lastSeenUnixTime = null;
+                if (profile.ValueKind == JsonValueKind.Object &&
+                    profile.TryGetProperty("last_seen", out var seenValue) &&
+                    seenValue.ValueKind == JsonValueKind.Object &&
+                    seenValue.TryGetProperty("time", out var seenTime) &&
+                    seenTime.TryGetInt64(out var parsedSeenTime) &&
+                    parsedSeenTime > 0)
+                {
+                    lastSeenUnixTime = parsedSeenTime;
+                }
+                var isAdmin = item.TryGetProperty("is_admin", out var adminValue) &&
+                              adminValue.ValueKind == JsonValueKind.True;
+                var isOwner = item.TryGetProperty("is_owner", out var ownerValue) &&
+                              ownerValue.ValueKind == JsonValueKind.True;
                 var deactivated = profile.ValueKind == JsonValueKind.Object &&
                                   profile.TryGetProperty("deactivated", out var deactivatedValue) &&
                                   deactivatedValue.ValueKind == JsonValueKind.String;
@@ -285,8 +411,11 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
                     online,
                     onlineMobile,
                     platform,
-                    hasLastSeen,
-                    deactivated));
+                    lastSeenUnixTime is not null,
+                    deactivated,
+                    isAdmin,
+                    isOwner,
+                    lastSeenUnixTime));
             }
 
             if (items.GetArrayLength() == 0)
@@ -324,7 +453,8 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
         string message,
         string? keyboard,
         CancellationToken cancellationToken,
-        long? replyToMessageId)
+        long? replyToMessageId,
+        long? replyToConversationMessageId)
     {
         var parameters = new Dictionary<string, string>
         {
@@ -339,7 +469,16 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
             parameters["keyboard"] = keyboard;
         }
 
-        if (replyToMessageId is > 0)
+        if (peerId > 2_000_000_000 && replyToConversationMessageId is > 0)
+        {
+            parameters["forward"] = JsonSerializer.Serialize(new
+            {
+                peer_id = peerId,
+                conversation_message_ids = new[] { replyToConversationMessageId.Value },
+                is_reply = true
+            });
+        }
+        else if (peerId <= 2_000_000_000 && replyToMessageId is > 0)
         {
             parameters["reply_to"] = replyToMessageId.Value.ToString();
         }
@@ -352,7 +491,8 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
         byte[] image,
         string caption,
         CancellationToken cancellationToken,
-        long? replyToMessageId = null)
+        long? replyToMessageId = null,
+        long? replyToConversationMessageId = null)
     {
         var uploadServer = await CallAsync("photos.getMessagesUploadServer", new Dictionary<string, string>
         {
@@ -423,7 +563,16 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
             ["access_token"] = accessToken,
             ["v"] = ApiVersion
         };
-        if (replyToMessageId is > 0)
+        if (peerId > 2_000_000_000 && replyToConversationMessageId is > 0)
+        {
+            parameters["forward"] = JsonSerializer.Serialize(new
+            {
+                peer_id = peerId,
+                conversation_message_ids = new[] { replyToConversationMessageId.Value },
+                is_reply = true
+            });
+        }
+        else if (peerId <= 2_000_000_000 && replyToMessageId is > 0)
         {
             parameters["reply_to"] = replyToMessageId.Value.ToString();
         }
@@ -456,6 +605,7 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken)
 }
 
 public sealed record VkConversationInfo(long PeerId, string Title, int MemberCount, long OwnerId);
+public sealed record VkHistoryMessage(long ConversationMessageId, long FromId);
 
 public sealed record VkConversationMember(
     long UserId,
@@ -465,4 +615,7 @@ public sealed record VkConversationMember(
     bool IsOnlineMobile,
     int Platform,
     bool HasLastSeen,
-    bool IsDeactivated);
+    bool IsDeactivated,
+    bool IsAdmin,
+    bool IsOwner,
+    long? LastSeenUnixTime);
