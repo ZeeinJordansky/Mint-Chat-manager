@@ -6,6 +6,7 @@ public sealed class PingCommand : IBotCommand
 {
     public string Name => "/ping";
     public string Description => "Проверить отклик и показать нагрузку";
+    public IReadOnlyCollection<string> Aliases => new[] { "/пинг" };
 
     public Task ExecuteAsync(
         VkApiClient api,
@@ -19,12 +20,13 @@ public sealed class PingCommand : IBotCommand
         var pingMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
 
         var message =
-            $"pong\n" +
-            $"Пинг (обработка): {pingMilliseconds:F1} ms\n" +
-            $"ОЗУ: занято {SystemMetrics.FormatBytes(memory.Used)}, свободно {SystemMetrics.FormatBytes(memory.Free)} " +
-            $"(всего {SystemMetrics.FormatBytes(memory.Total)})\n" +
-            $"ЦПУ бота: {cpuUsage:F1}% в среднем с запуска ({Environment.ProcessorCount} ядер)";
+            "┌─ 🛰️ Проверка отклика бота\n" +
+            $"│ Пинг: {pingMilliseconds:F1} мс\n" +
+            $"│ ОЗУ: {SystemMetrics.FormatBytes(memory.Used)} занято / {SystemMetrics.FormatBytes(memory.Free)} свободно\n" +
+            $"│ Всего: {SystemMetrics.FormatBytes(memory.Total)}\n" +
+            $"│ CPU: {cpuUsage:F1}% средняя нагрузка ({Environment.ProcessorCount} ядер)\n" +
+            "└─────────────────────────────";
 
-        return api.SendMessageAsync(context.PeerId, message, cancellationToken);
+        return context.SendMessageAsync(api, message, cancellationToken);
     }
 }

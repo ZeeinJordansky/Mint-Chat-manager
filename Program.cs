@@ -7,19 +7,13 @@ LoadDotEnv();
 var accessToken = Environment.GetEnvironmentVariable("VK_ACCESS_TOKEN");
 var groupIdValue = Environment.GetEnvironmentVariable("VK_GROUP_ID") ?? "232664735";
 var postgresPassword = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD");
-var ollamaBaseUrl = Environment.GetEnvironmentVariable("OLLAMA_BASE_URL") ?? "http://localhost:11434/";
-var ollamaModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? "qwen2.5:7b";
 
 if (string.IsNullOrWhiteSpace(accessToken) ||
     string.IsNullOrWhiteSpace(postgresPassword) ||
-    !long.TryParse(groupIdValue, out var groupId) ||
-    !Uri.TryCreate(ollamaBaseUrl, UriKind.Absolute, out var ollamaBaseUri) ||
-    (ollamaBaseUri.Scheme != Uri.UriSchemeHttp && ollamaBaseUri.Scheme != Uri.UriSchemeHttps) ||
-    string.IsNullOrWhiteSpace(ollamaModel))
+    !long.TryParse(groupIdValue, out var groupId))
 {
     Console.Error.WriteLine(
-        "Set VK_ACCESS_TOKEN and POSTGRES_PASSWORD, provide a valid VK_GROUP_ID, " +
-        "and configure a valid OLLAMA_BASE_URL and OLLAMA_MODEL.");
+        "Set VK_ACCESS_TOKEN and POSTGRES_PASSWORD, and provide a valid VK_GROUP_ID.");
     return 1;
 }
 
@@ -83,18 +77,37 @@ var statistics = new BotStatistics();
 var commands = new List<IBotCommand>
 {
     new PingCommand(),
-    new StatsCommand(statistics),
-    new UptimeCommand(statistics),
-    new ResourcesCommand(),
-    new TimeCommand(),
     new IdCommand(),
-    new ProfileCommand(store),
-    new SqlCommand(store, adminIds),
-    new AiCommand(httpClient, ollamaBaseUri, ollamaModel)
+    new ProfileCommand(store, adminIds),
+    new WarnCommand(store, adminIds),
+    new UnwarnCommand(store, adminIds),
+    new MuteCommand(store, adminIds),
+    new UnmuteCommand(store, adminIds),
+    new KickCommand(store, adminIds),
+    new SilentKickCommand(store, adminIds),
+    new BanCommand(store, adminIds),
+    new UnbanCommand(store, adminIds),
+    new ListsCommand(store, adminIds),
+    new AddAccessLevelCommand(store, adminIds),
+    new RemoveRoleCommand(store, adminIds),
+    new StaffListCommand(store),
+    new GetRoleCommand(store, adminIds),
+    new PinCommand(store, adminIds),
+    new UnpinCommand(store, adminIds),
+    new BalanceCommand(store),
+    new BitcoinRateCommand(),
+    new BuyBitcoinCommand(store),
+    new SellBitcoinCommand(store),
+    new BankDepositCommand(store),
+    new BankWithdrawCommand(store),
+    new TransferMoneyCommand(store),
+    new ConfirmTransferCommand(store),
+    new CancelTransferCommand(),
+    new DailyBonusCommand(store),
+    new ClaimDailyBonusCommand(store)
 };
 commands.Add(new HelpCommand(commands));
-commands.Add(new EchoCommand());
-var router = new CommandRouter(api, commands, statistics);
+var router = new CommandRouter(api, commands, statistics, store);
 var bot = new LongPollBot(api, router, groupId, statistics, store);
 using var cancellationTokenSource = new CancellationTokenSource();
 
@@ -110,11 +123,16 @@ return 0;
 
 static void LoadDotEnv()
 {
-    const string envFile = ".env";
+    var envFile = Path.Combine(Directory.GetCurrentDirectory(), "Configuration", ".env");
     if (!File.Exists(envFile))
     {
-        return;
+        envFile = Path.Combine(AppContext.BaseDirectory, "Configuration", ".env");
+        if (!File.Exists(envFile))
+        {
+            return;
+        }
     }
+
 
     foreach (var line in File.ReadLines(envFile))
     {
@@ -127,7 +145,7 @@ static void LoadDotEnv()
         var separator = entry.IndexOf('=');
         if (separator <= 0)
         {
-            throw new FormatException($"Invalid entry in {envFile}; expected KEY=VALUE.");
+            throw new FormatException($"Invalid entry in Configuration/.env; expected KEY=VALUE.");
         }
 
         var name = entry[..separator].Trim();

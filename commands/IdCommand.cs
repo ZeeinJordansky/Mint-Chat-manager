@@ -4,6 +4,7 @@ public sealed class IdCommand : IBotCommand
 {
     public string Name => "/id";
     public string Description => "Показать ID беседы или пользователя";
+    public IReadOnlyCollection<string> Aliases => new[] { "/ид", "/идентификатор" };
 
     public Task ExecuteAsync(
         VkApiClient api,
@@ -11,9 +12,12 @@ public sealed class IdCommand : IBotCommand
         string arguments,
         CancellationToken cancellationToken)
     {
-        return api.SendMessageAsync(
-            context.PeerId,
-            $"ID беседы или пользователя: {context.PeerId}",
-            cancellationToken);
+        var message =
+            "┌─ 🆔 Идентификатор\n" +
+            $"│ Peer ID: {context.PeerId}\n" +
+            $"│ User ID: {context.UserId}\n" +
+            "└────────────────────";
+
+        return context.SendMessageAsync(api, message, cancellationToken);
     }
 }

@@ -12,7 +12,7 @@ public sealed class LongPollBot(
 {
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        var updateChannel = Channel.CreateBounded<BotMessageUpdate>(new BoundedChannelOptions(64)
+        var updateChannel = Channel.CreateBounded<BotUpdate>(new BoundedChannelOptions(64)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleWriter = true,
@@ -36,7 +36,7 @@ public sealed class LongPollBot(
     }
 
     private async Task RunLongPollingAsync(
-        ChannelWriter<BotMessageUpdate> updateWriter,
+        ChannelWriter<BotUpdate> updateWriter,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -74,10 +74,10 @@ public sealed class LongPollBot(
 
                     foreach (var update in updates.EnumerateArray())
                     {
-                        var message = ParseMessageUpdate(update);
-                        if (message is { } parsedMessage)
+                        var botUpdate = ParseUpdate(update);
+                        if (botUpdate is { } parsedUpdate)
                         {
-                            await updateWriter.WriteAsync(parsedMessage, cancellationToken);
+                            await updateWriter.WriteAsync(parsedUpdate, cancellationToken);
                         }
                     }
 
@@ -104,7 +104,7 @@ public sealed class LongPollBot(
     }
 
     private async Task ProcessUpdatesAsync(
-        ChannelReader<BotMessageUpdate> updateReader,
+        ChannelReader<BotUpdate> updateReader,
         CancellationToken cancellationToken)
     {
         try
@@ -113,11 +113,26 @@ public sealed class LongPollBot(
             {
                 try
                 {
-                    await store.RecordMessageAsync(update.UserId, cancellationToken);
-                    statistics.RecordMessage();
+                    if (update.EventId is not null)
+                    {
+                        await api.AnswerMessageEventAsync(
+                            update.PeerId,
+                            update.UserId,
+                            update.EventId,
+                            cancellationToken);
+                    }
+                    else
+                    {
+                        await store.RecordMessageAsync(update.UserId, cancellationToken);
+                        statistics.RecordMessage();
+                    }
+
                     await commandRouter.HandleAsync(
                         update.PeerId,
                         update.UserId,
+                        update.MessageId,
+                        update.ReplyToUserId,
+                        update.ReplyToConversationMessageId,
                         update.Text,
                         cancellationToken);
                 }
@@ -136,10 +151,20 @@ public sealed class LongPollBot(
         }
     }
 
-    private static BotMessageUpdate? ParseMessageUpdate(JsonElement update)
+    private static BotUpdate? ParseUpdate(JsonElement update)
     {
-        if (!update.TryGetProperty("type", out var type) || type.GetString() != "message_new" ||
+        if (!update.TryGetProperty("type", out var type) ||
             !update.TryGetProperty("object", out var payload))
+        {
+            return null;
+        }
+
+        if (type.GetString() == "message_event")
+        {
+            return ParseCallbackUpdate(payload);
+        }
+
+        if (type.GetString() != "message_new")
         {
             return null;
         }
@@ -169,8 +194,89 @@ public sealed class LongPollBot(
             return null;
         }
 
-        return new BotMessageUpdate(peerId.GetInt64(), userId.GetInt64(), text.GetString() ?? "");
+        long? messageId = payload.TryGetProperty("id", out var id) &&
+                          id.ValueKind == JsonValueKind.Number &&
+                          id.TryGetInt64(out var parsedMessageId) &&
+                          parsedMessageId > 0
+            ? parsedMessageId
+            : null;
+
+        long? replyToUserId = null;
+        long? replyToConversationMessageId = null;
+        if (payload.TryGetProperty("reply_message", out var reply) &&
+            reply.ValueKind == JsonValueKind.Object)
+        {
+            if (reply.TryGetProperty("from_id", out var replyFromId) &&
+                replyFromId.ValueKind == JsonValueKind.Number &&
+                replyFromId.TryGetInt64(out var parsedReplyUserId))
+            {
+                replyToUserId = parsedReplyUserId;
+            }
+
+            if (reply.TryGetProperty("conversation_message_id", out var replyCmid) &&
+                replyCmid.ValueKind == JsonValueKind.Number &&
+                replyCmid.TryGetInt64(out var parsedReplyCmid) &&
+                parsedReplyCmid > 0)
+            {
+                replyToConversationMessageId = parsedReplyCmid;
+            }
+        }
+        else if (payload.TryGetProperty("fwd_messages", out var forwarded) &&
+                 forwarded.ValueKind == JsonValueKind.Array &&
+                 forwarded.GetArrayLength() > 0 &&
+                 forwarded[0].TryGetProperty("conversation_message_id", out var forwardedCmid) &&
+                 forwardedCmid.ValueKind == JsonValueKind.Number &&
+                 forwardedCmid.TryGetInt64(out var parsedForwardedCmid) &&
+                 parsedForwardedCmid > 0)
+        {
+            replyToConversationMessageId = parsedForwardedCmid;
+        }
+
+        return new BotUpdate(
+            peerId.GetInt64(),
+            userId.GetInt64(),
+            messageId,
+            text.GetString() ?? "",
+            replyToUserId,
+            replyToConversationMessageId);
+    }
+
+    private static BotUpdate? ParseCallbackUpdate(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("peer_id", out var peerId) || peerId.ValueKind != JsonValueKind.Number ||
+            !payload.TryGetProperty("user_id", out var userId) || userId.ValueKind != JsonValueKind.Number ||
+            !payload.TryGetProperty("event_id", out var eventId) || eventId.ValueKind != JsonValueKind.String ||
+            !payload.TryGetProperty("payload", out var buttonPayload) ||
+            buttonPayload.ValueKind != JsonValueKind.Object ||
+            !buttonPayload.TryGetProperty("command", out var command) ||
+            command.ValueKind != JsonValueKind.String)
+        {
+            Console.Error.WriteLine("Received message_event without peer_id, user_id, event_id or command payload.");
+            return null;
+        }
+
+        long? messageId = payload.TryGetProperty("message_id", out var id) &&
+                          id.ValueKind == JsonValueKind.Number &&
+                          id.TryGetInt64(out var parsedMessageId) &&
+                          parsedMessageId > 0
+            ? parsedMessageId
+            : null;
+
+        return new BotUpdate(
+            peerId.GetInt64(),
+            userId.GetInt64(),
+            messageId,
+            command.GetString() ?? "",
+            EventId: eventId.GetString());
     }
 }
 
-internal readonly record struct BotMessageUpdate(long PeerId, long UserId, string Text);
+internal readonly record struct BotUpdate(
+    long PeerId,
+    long UserId,
+    long? MessageId,
+    string Text,
+    long? ReplyToUserId = null,
+    long? ReplyToConversationMessageId = null,
+    string? EventId = null);

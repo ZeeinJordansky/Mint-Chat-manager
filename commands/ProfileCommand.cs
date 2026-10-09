@@ -1,11 +1,13 @@
-using System.Text.Json;
+using System.Globalization;
 
 namespace MintChatManager.Commands;
 
-public sealed class ProfileCommand(PostgresStore store) : IBotCommand
+public sealed class ProfileCommand(PostgresStore store, IReadOnlySet<long> administratorIds) : IBotCommand
 {
-    public string Name => "/профиль";
-    public string Description => "Показать сохранённый профиль этого чата";
+    public string Name => "/stats";
+    public string Description => "Показать статистику пользователя";
+    public IReadOnlyCollection<string> Aliases =>
+        new[] { "/стата", "/статистика", "/статс", "/stata", "/профиль", "/profile", "/я" };
 
     public async Task ExecuteAsync(
         VkApiClient api,
@@ -13,17 +15,35 @@ public sealed class ProfileCommand(PostgresStore store) : IBotCommand
         string arguments,
         CancellationToken cancellationToken)
     {
-        var profile = await store.GetProfileAsync(context.UserId, cancellationToken)
-            ?? throw new InvalidOperationException($"No database profile exists for user {context.UserId}.");
-        using var settings = JsonDocument.Parse(profile.SettingsJson);
-        var settingsCount = settings.RootElement.EnumerateObject().Count();
-        var message =
-            $"Профиль пользователя\n" +
-            $"ID пользователя: {context.UserId}\n" +
-            $"Сообщений обработано: {profile.MessagesCount}\n" +
-            $"Профиль создан: {profile.CreatedAt.ToLocalTime():yyyy-MM-dd HH:mm:ss zzz}\n" +
-            $"Сохранённых настроек: {settingsCount}";
+        var (targetId, _) = CommandTargetParser.Resolve(context, arguments);
+        targetId ??= context.UserId;
+        var stats = await store.GetUserStatisticsAsync(
+            context.PeerId,
+            targetId.Value,
+            administratorIds,
+            cancellationToken);
+        if (stats is null)
+        {
+            await context.SendMessageAsync(
+                api,
+                $"Для [id{targetId.Value}|пользователя] пока нет сохранённой статистики.",
+                cancellationToken);
+            return;
+        }
 
-        await api.SendMessageAsync(context.PeerId, message, cancellationToken);
+        var moscowTime = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(stats.LastSeenAt, "Europe/Moscow");
+        var message =
+            "┌─ 📊 Статистика пользователя\n" +
+            $"│ Пользователь: [id{stats.UserId}|профиль]\n" +
+            $"│ Должность: {BotRoleNames.GetDisplayName(stats.Role)}\n" +
+            $"│ Предупреждений: {stats.WarningCount}\n" +
+            $"│ Активная блокировка чата: {(stats.IsMuted ? "да" : "нет")}\n" +
+            $"│ Сообщений сегодня: {stats.MessagesToday.ToString("N0", CultureInfo.GetCultureInfo("ru-RU"))}\n" +
+            $"│ Сообщений за неделю: {stats.MessagesThisWeek.ToString("N0", CultureInfo.GetCultureInfo("ru-RU"))}\n" +
+            $"│ Сообщений всего: {stats.MessagesAllTime.ToString("N0", CultureInfo.GetCultureInfo("ru-RU"))}\n" +
+            $"│ Последняя активность: {moscowTime:dd.MM.yyyy HH:mm:ss} МСК\n" +
+            "└────────────────────────";
+
+        await context.SendMessageAsync(api, message, cancellationToken);
     }
 }
