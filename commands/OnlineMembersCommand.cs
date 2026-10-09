@@ -9,7 +9,8 @@ public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long>
     public string Name => "/olist";
     public string Description => "Показать список участников беседы по статусу";
     public decimal MinimumRole => 2;
-    public IReadOnlyCollection<string> Aliases => new[] { "/онлайн", "/олист", "/onlinelist" };
+    public IReadOnlyCollection<string> Aliases =>
+        new[] { "/онлайн", "/олист", "/онлайнлист", "/online", "/onlinelist" };
 
     public async Task ExecuteAsync(
         VkApiClient api,
@@ -33,14 +34,15 @@ public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long>
             return;
         }
 
-        var isOfflineList = context.CommandName is "/offlinelist" or "/offline" or "/офлайн";
+        var isOfflineList = context.CommandName is
+            "/offlinelist" or "/offline" or "/офлайн" or "/оффлайнлист" or "/офлайнлист";
         var page = int.TryParse(arguments.Trim(), out var requestedPage)
             ? Math.Clamp(requestedPage, 1, int.MaxValue / PageSize)
             : 1;
         var filteredMembers = members
             .Where(member => !member.IsDeactivated &&
                              (isOfflineList
-                                 ? !member.IsOnline && !member.IsOnlineMobile
+                                 ? !member.IsOnline && !member.IsOnlineMobile && member.LastSeenUnixTime is > 0
                                  : member.IsOnline || member.IsOnlineMobile))
             .OrderBy(member => member.FirstName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(member => member.LastName, StringComparer.OrdinalIgnoreCase)
@@ -48,45 +50,43 @@ public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long>
         var pageCount = Math.Max(1, (filteredMembers.Length + PageSize - 1) / PageSize);
         page = Math.Min(page, pageCount);
         var pageMembers = filteredMembers.Skip((page - 1) * PageSize).Take(PageSize).ToArray();
-        var title = isOfflineList ? "Офлайн-участники" : "Онлайн-участники";
-        var text = $"...::Список беседы::...\n\n| {title}: {filteredMembers.Length}\n";
+        var title = isOfflineList ? "Пользователи оффлайн" : "Пользователи онлайн";
+        var state = isOfflineList ? "оффлайн" : "онлайн";
+        var text = $"{(isOfflineList ? "⚪" : "🟢")} {title}\n\nВсего {state}: {filteredMembers.Length}\n\n";
         if (pageMembers.Length == 0)
         {
-            text += "\nВ этом списке пока никого нет.";
+            text += isOfflineList
+                ? "Все участники сейчас в сети."
+                : "В данный момент нет участников онлайн.";
         }
         else
         {
-            text += "\n" + string.Join('\n', pageMembers.Select((member, index) =>
+            text += string.Join("\n\n", pageMembers.Select(member =>
             {
-                var number = (page - 1) * PageSize + index + 1;
                 var status = isOfflineList
-                    ? FormatLastSeen(member.LastSeenUnixTime)
-                    : member.IsOnlineMobile
-                        ? $"онлайн · {FormatPlatform(member.Platform)}"
-                        : "онлайн";
-                return $"{number}) {FormatName(member)} — {status}";
+                    ? $"был(-а) в сети {FormatLastSeen(member.LastSeenUnixTime)}"
+                    : FormatOnlinePlatform(member);
+                return $"{FormatName(member)} — {status}";
             }));
         }
 
         var buttons = new List<object[]>();
         if (page > 1 || page < pageCount)
         {
-            var navigation = new List<object>();
-            if (page > 1)
+            var previousPage = page > 1 ? page - 1 : pageCount;
+            var nextPage = page < pageCount ? page + 1 : 1;
+            buttons.Add(new[]
             {
-                navigation.Add(CreateButton("◀", $"{context.CommandName} {page - 1}", "primary"));
-            }
-            if (page < pageCount)
-            {
-                navigation.Add(CreateButton("▶", $"{context.CommandName} {page + 1}", "primary"));
-            }
-            buttons.Add(navigation.ToArray());
+                CreateButton("◀ Назад", $"{context.CommandName} {previousPage}", "primary"),
+                CreateButton("Далее ▶", $"{context.CommandName} {nextPage}", "primary")
+            });
         }
 
         buttons.Add(new[]
         {
-            CreateButton(isOfflineList ? "Показать онлайн" : "Показать офлайн",
-                isOfflineList ? "/olist 1" : "/offlinelist 1", "secondary")
+            CreateButton(isOfflineList ? "Онлайн" : "Оффлайн",
+                isOfflineList ? "/olist 1" : "/offlinelist 1",
+                isOfflineList ? "primary" : "secondary")
         });
         var keyboard = JsonSerializer.Serialize(new
         {
@@ -94,13 +94,9 @@ public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long>
             buttons = buttons.Select(row => row.Select(button => button).ToArray())
         });
         if (context.IsCallback)
-        {
             await context.EditMessageAsync(api, text, keyboard, cancellationToken);
-        }
         else
-        {
-            await context.SendMessageWithKeyboardAsync(api, text, keyboard, cancellationToken);
-        }
+            await context.SendMessageWithKeyboardAsync(api, text, keyboard, cancellationToken, quoteCommand: false);
     }
 
     private static object CreateButton(string label, string command, string color) =>
@@ -125,22 +121,31 @@ public sealed class OnlineMembersCommand(PostgresStore store, IReadOnlySet<long>
     {
         if (unixTime is null)
         {
-            return "время последнего посещения неизвестно";
+            return "неизвестно";
         }
 
         var localTime = DateTimeOffset.FromUnixTimeSeconds(unixTime.Value).ToOffset(TimeSpan.FromHours(3));
-        return $"был(а) {localTime:dd.MM.yyyy HH:mm} МСК";
+        var weekdays = new[] { "воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота" };
+        var months = new[]
+        {
+            "января", "февраля", "марта", "апреля", "мая", "июня",
+            "июля", "августа", "сентября", "октября", "ноября", "декабря"
+        };
+        return $"{localTime:HH} ч. {localTime:mm} м. {localTime:ss} с. (МСК) | " +
+               $"{weekdays[(int)localTime.DayOfWeek]}, {localTime:dd} {months[localTime.Month - 1]}, {localTime:yyyy} года";
     }
 
-    private static string FormatPlatform(int platform) => platform switch
+    private static string FormatOnlinePlatform(VkConversationMember member)
     {
-        1 => "мобильная версия",
-        2 => "iPhone",
-        3 => "iPad",
-        4 => "Android",
-        5 => "Windows Phone",
-        6 => "приложение VK",
-        7 => "сайт VK",
-        _ => "мобильное устройство"
-    };
+        if (member.IsOnlineMobile)
+        {
+            return member.Platform is 2 or 3 ? "Iphone" : "Android";
+        }
+
+        return member.Platform is 2 or 3
+            ? "Iphone"
+            : member.Platform == 4
+                ? "Android"
+                : "PC";
+    }
 }

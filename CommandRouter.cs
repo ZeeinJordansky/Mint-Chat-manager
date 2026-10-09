@@ -31,13 +31,15 @@ public readonly record struct BotCommandContext(
         VkApiClient api,
         string message,
         CancellationToken cancellationToken,
-        bool quoteCommand = true)
+        bool quoteCommand = true,
+        bool disableMentions = false)
     {
         return api.SendMessageAsync(
             PeerId,
             message,
             cancellationToken,
-            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null);
+            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null,
+            disableMentions: disableMentions);
     }
 
     public Task SendPhotoAsync(
@@ -50,19 +52,38 @@ public readonly record struct BotCommandContext(
             PeerId, image, caption, cancellationToken, replyToConversationMessageId: ConversationMessageId);
     }
 
+    public Task SendMessageWithAttachmentAsync(
+        VkApiClient api,
+        string message,
+        string attachment,
+        CancellationToken cancellationToken,
+        bool quoteCommand = true,
+        bool disableMentions = false)
+    {
+        return api.SendMessageWithAttachmentAsync(
+            PeerId,
+            message,
+            attachment,
+            cancellationToken,
+            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null,
+            disableMentions: disableMentions);
+    }
+
     public Task SendMessageWithKeyboardAsync(
         VkApiClient api,
         string message,
         string keyboard,
         CancellationToken cancellationToken,
-        bool quoteCommand = true)
+        bool quoteCommand = true,
+        bool disableMentions = false)
     {
         return api.SendMessageWithKeyboardAsync(
             PeerId,
             message,
             keyboard,
             cancellationToken,
-            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null);
+            replyToConversationMessageId: quoteCommand ? ConversationMessageId : null,
+            disableMentions: disableMentions);
     }
 
     public Task EditMessageAsync(
@@ -71,12 +92,29 @@ public readonly record struct BotCommandContext(
         string? keyboard,
         CancellationToken cancellationToken)
     {
-        if (MessageId is not > 0)
+        return EditMessageCoreAsync(api, message, keyboard, cancellationToken);
+    }
+
+    private async Task EditMessageCoreAsync(
+        VkApiClient api,
+        string message,
+        string? keyboard,
+        CancellationToken cancellationToken)
+    {
+        var messageId = MessageId;
+        if (messageId is not > 0 && ConversationMessageId is > 0)
         {
-            throw new InvalidOperationException("Cannot edit a VK message without its message ID.");
+            messageId = await api.GetMessageIdByConversationMessageIdAsync(
+                PeerId, ConversationMessageId.Value, cancellationToken);
         }
 
-        return api.EditMessageAsync(PeerId, MessageId.Value, message, keyboard, cancellationToken);
+        if (messageId is not > 0)
+        {
+            throw new InvalidOperationException(
+                $"VK did not provide a message ID for callback message {ConversationMessageId?.ToString() ?? "unknown"}.");
+        }
+
+        await api.EditMessageAsync(PeerId, messageId.Value, message, keyboard, cancellationToken);
     }
 }
 

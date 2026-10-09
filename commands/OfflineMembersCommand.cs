@@ -5,7 +5,8 @@ public sealed class OfflineMembersCommand(PostgresStore store, IReadOnlySet<long
     public string Name => "/offlinelist";
     public string Description => "Показать список офлайн-участников беседы";
     public decimal MinimumRole => 2;
-    public IReadOnlyCollection<string> Aliases => new[] { "/оффлайн", "/оффлайны", "/офф" };
+    public IReadOnlyCollection<string> Aliases =>
+        new[] { "/оффлайн", "/оффлайны", "/офф", "/оффлайнлист", "/офлайнлист", "/offline" };
 
     public Task ExecuteAsync(
         VkApiClient api,

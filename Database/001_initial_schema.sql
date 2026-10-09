@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS chat_settings (
     rules TEXT NOT NULL DEFAULT '',
     info TEXT NOT NULL DEFAULT '',
     no_prefix BOOLEAN NOT NULL DEFAULT FALSE,
+    silence_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    silence_min_role NUMERIC(4,1) NOT NULL DEFAULT 1,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

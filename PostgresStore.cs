@@ -1,3 +1,4 @@
+using System.Globalization;
 using Npgsql;
 
 namespace MintChatManager;
@@ -451,7 +452,8 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
         }
 
         const string selectSql = """
-            SELECT is_active, rules, info, no_prefix FROM chat_settings WHERE peer_id = @peer_id;
+            SELECT is_active, rules, info, no_prefix, silence_enabled, silence_min_role
+            FROM chat_settings WHERE peer_id = @peer_id;
             """;
         await using var select = dataSource.CreateCommand(selectSql);
         select.Parameters.AddWithValue("peer_id", peerId);
@@ -461,7 +463,31 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
             throw new InvalidOperationException($"Failed to load settings for peer {peerId}.");
         }
 
-        return new ChatSettings(peerId, reader.GetBoolean(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
+        return new ChatSettings(
+            peerId,
+            reader.GetBoolean(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetBoolean(3),
+            reader.GetBoolean(4),
+            reader.GetDecimal(5));
+    }
+
+    public async Task<(bool Enabled, decimal MinimumRole)> GetChatSilenceAsync(
+        long peerId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT silence_enabled, silence_min_role
+            FROM chat_settings
+            WHERE peer_id = @peer_id;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? (reader.GetBoolean(0), reader.GetDecimal(1))
+            : (false, 1m);
     }
 
     public async Task UpdateChatSettingsAsync(
@@ -488,6 +514,10 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
                 break;
             case "no_prefix":
                 column = "no_prefix";
+                parameterValue = bool.Parse(value);
+                break;
+            case "silence":
+                column = "silence_enabled";
                 parameterValue = bool.Parse(value);
                 break;
             default:
@@ -844,6 +874,77 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
         return new ChatNicknamePage(total, nicknames);
     }
 
+    public async Task<IReadOnlyList<GameLeaderboardEntry>> GetGameLeaderboardAsync(
+        long peerId,
+        string category,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        const string profileSql = """
+            SELECT user_id, score
+            FROM (
+                SELECT user_id, {0}::bigint AS score
+                FROM user_profiles
+            ) AS ranked
+            ORDER BY score DESC, user_id
+            LIMIT @limit;
+            """;
+        var column = category switch
+        {
+            "money" => "wallet_balance",
+            "bank" => "bank_balance",
+            "beer" => "beer",
+            "btc" => "btc_balance",
+            "reputation" => "reputation",
+            _ => null
+        };
+        var sql = column is not null
+            ? string.Format(CultureInfo.InvariantCulture, profileSql, column)
+            : """
+              SELECT user_id, message_count
+              FROM chat_message_totals
+              WHERE peer_id = @peer_id
+              ORDER BY message_count DESC, user_id
+              LIMIT @limit;
+              """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("limit", limit);
+        if (column is null)
+        {
+            command.Parameters.AddWithValue("peer_id", peerId);
+        }
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var results = new List<GameLeaderboardEntry>(limit);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new GameLeaderboardEntry(reader.GetInt64(0), reader.GetInt64(1)));
+        }
+
+        return results;
+    }
+
+    public async Task<long> GetChatMessageRankAsync(
+        long peerId,
+        long userId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT COUNT(*) + 1
+            FROM chat_message_totals AS other
+            WHERE other.peer_id = @peer_id
+              AND other.message_count > COALESCE(
+                  (SELECT own.message_count
+                   FROM chat_message_totals AS own
+                   WHERE own.peer_id = @peer_id AND own.user_id = @user_id),
+                  0);
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("peer_id", peerId);
+        command.Parameters.AddWithValue("user_id", userId);
+        return (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 1L);
+    }
+
     public async Task<RoleAssignment?> GetRoleAssignmentAsync(
         long peerId,
         long userId,
@@ -1043,7 +1144,14 @@ public sealed record DailyBonusClaimResult(
     long Beer,
     DateTimeOffset? AvailableAt);
 
-public sealed record ChatSettings(long PeerId, bool IsActive, string Rules, string Info, bool NoPrefix);
+public sealed record ChatSettings(
+    long PeerId,
+    bool IsActive,
+    string Rules,
+    string Info,
+    bool NoPrefix,
+    bool SilenceEnabled,
+    decimal SilenceMinimumRole);
 
 public sealed record ModerationStatus(int WarningCount, bool IsMuted, bool IsBanned);
 
@@ -1056,6 +1164,8 @@ public sealed record ChatNickname(
     DateTimeOffset UpdatedAt);
 
 public sealed record ChatNicknamePage(long TotalCount, IReadOnlyList<ChatNickname> Nicknames);
+
+public sealed record GameLeaderboardEntry(long UserId, long Score);
 
 public sealed record RoleAssignment(
     long UserId,

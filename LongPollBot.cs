@@ -9,7 +9,9 @@ public sealed class LongPollBot(
     CommandRouter commandRouter,
     long groupId,
     BotStatistics statistics,
-    PostgresStore store)
+    PostgresStore store,
+    IReadOnlySet<long> administratorIds,
+    SilenceModeCache silenceModeCache)
 {
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -116,14 +118,67 @@ public sealed class LongPollBot(
                 {
                     if (update.EventId is not null)
                     {
-                        await api.AnswerMessageEventAsync(
-                            update.PeerId,
-                            update.UserId,
-                            update.EventId,
-                            cancellationToken);
+                        try
+                        {
+                            await api.AnswerMessageEventAsync(
+                                update.PeerId,
+                                update.UserId,
+                                update.EventId,
+                                cancellationToken);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+                        catch (Exception exception)
+                        {
+                            Console.Error.WriteLine($"Failed to acknowledge VK button event: {exception.Message}");
+                        }
                     }
                     else
                     {
+                        if (ModerationCommandAccess.IsConversation(update.PeerId))
+                        {
+                            var silence = await silenceModeCache.GetAsync(
+                                store, update.PeerId, cancellationToken);
+                            if (silence.Enabled &&
+                                !administratorIds.Contains(update.UserId) &&
+                                await ModerationCommandAccess.GetEffectiveRoleAsync(
+                                    api,
+                                    store,
+                                    update.PeerId,
+                                    update.UserId,
+                                    administratorIds,
+                                    cancellationToken) < silence.MinimumRole)
+                            {
+                                if (update.ConversationMessageId is > 0)
+                                {
+                                    try
+                                    {
+                                        await api.DeleteConversationMessageAsync(
+                                            update.PeerId, update.ConversationMessageId.Value, cancellationToken);
+                                    }
+                                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                                    {
+                                        return;
+                                    }
+                                    catch (Exception exception)
+                                    {
+                                        Console.Error.WriteLine(
+                                            $"Failed to delete a message blocked by silence mode: {exception.Message}");
+                                    }
+                                }
+                                else
+                                {
+                                    Console.Error.WriteLine(
+                                        $"Cannot enforce silence mode: VK update has no conversation message ID " +
+                                        $"(peer {update.PeerId}, user {update.UserId}).");
+                                }
+
+                                continue;
+                            }
+                        }
+
                         await store.RecordMessageAsync(update.PeerId, update.UserId, cancellationToken);
                         statistics.RecordMessage();
                     }

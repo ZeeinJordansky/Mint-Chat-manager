@@ -7,7 +7,7 @@ public sealed class AddAccessLevelCommand(PostgresStore store, IReadOnlySet<long
     public decimal MinimumRole => 2;
     public IReadOnlyCollection<string> Aliases => new[]
     {
-        "/addlevel", "/setlevel", "/setaccesslevel", "/addaccess", "/выдатьуровень", "/выдатьправа"
+        "/addlevel", "/setlevel", "/setaccesslevel", "/addaccess", "/сетлевел", "/выдатьуровень", "/выдатьправа"
     };
 
     public async Task ExecuteAsync(

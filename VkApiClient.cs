@@ -31,21 +31,27 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         long peerId,
         long userId,
         string eventId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? toastText = null)
     {
-        return CallAsync("messages.sendMessageEventAnswer", new Dictionary<string, string>
+        var parameters = new Dictionary<string, string>
         {
             ["peer_id"] = peerId.ToString(),
             ["user_id"] = userId.ToString(),
             ["event_id"] = eventId,
-            ["event_data"] = JsonSerializer.Serialize(new
-            {
-                type = "show_snackbar",
-                text = "Команда выполняется"
-            }),
             ["access_token"] = accessToken,
             ["v"] = ApiVersion
-        }, cancellationToken);
+        };
+        if (!string.IsNullOrWhiteSpace(toastText))
+        {
+            parameters["event_data"] = JsonSerializer.Serialize(new
+            {
+                type = "show_snackbar",
+                text = toastText
+            });
+        }
+
+        return CallAsync("messages.sendMessageEventAnswer", parameters, cancellationToken);
     }
 
     public Task SendMessageAsync(
@@ -53,9 +59,12 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         string message,
         CancellationToken cancellationToken,
         long? replyToMessageId = null,
-        long? replyToConversationMessageId = null)
+        long? replyToConversationMessageId = null,
+        bool disableMentions = false)
     {
-        return SendMessageAsync(peerId, message, null, cancellationToken, replyToMessageId, replyToConversationMessageId);
+        return SendMessageAsync(
+            peerId, message, null, cancellationToken, replyToMessageId, replyToConversationMessageId,
+            disableMentions: disableMentions);
     }
 
     public Task SendMessageWithKeyboardAsync(
@@ -64,10 +73,33 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         string keyboard,
         CancellationToken cancellationToken,
         long? replyToMessageId = null,
-        long? replyToConversationMessageId = null)
+        long? replyToConversationMessageId = null,
+        bool disableMentions = false)
     {
         return SendMessageAsync(
-            peerId, message, keyboard, cancellationToken, replyToMessageId, replyToConversationMessageId);
+            peerId, message, keyboard, cancellationToken, replyToMessageId, replyToConversationMessageId,
+            disableMentions: disableMentions);
+    }
+
+    public Task SendMessageWithAttachmentAsync(
+        long peerId,
+        string message,
+        string attachment,
+        CancellationToken cancellationToken,
+        long? replyToMessageId = null,
+        long? replyToConversationMessageId = null,
+        bool disableMentions = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(attachment);
+        return SendMessageAsync(
+            peerId,
+            message,
+            null,
+            cancellationToken,
+            replyToMessageId,
+            replyToConversationMessageId,
+            attachment,
+            disableMentions);
     }
 
     public Task EditMessageAsync(
@@ -91,6 +123,24 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         }
 
         return CallAsync("messages.edit", parameters, cancellationToken);
+    }
+
+    public async Task<long?> GetMessageIdByConversationMessageIdAsync(
+        long peerId,
+        long conversationMessageId,
+        CancellationToken cancellationToken)
+    {
+        var response = await CallAsync("messages.getByConversationMessageId", new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["conversation_message_ids"] = conversationMessageId.ToString(),
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        }, cancellationToken);
+        var items = response.GetProperty("items");
+        return items.GetArrayLength() == 0 || !items[0].TryGetProperty("id", out var messageId)
+            ? null
+            : messageId.GetInt64();
     }
 
     public Task ChangeConversationMemberRestrictionsAsync(
@@ -146,6 +196,28 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         return CallAsync("messages.unpin", new Dictionary<string, string>
         {
             ["peer_id"] = peerId.ToString(),
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        }, cancellationToken);
+    }
+
+    public Task DeleteConversationMessageAsync(
+        long peerId,
+        long conversationMessageId,
+        CancellationToken cancellationToken)
+    {
+        if (peerId <= 2_000_000_000 || conversationMessageId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(conversationMessageId), "A conversation message ID and peer ID are required.");
+        }
+
+        return CallAsync("messages.delete", new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["conversation_message_ids"] = conversationMessageId.ToString(),
+            ["delete_for_all"] = "1",
+            ["group_id"] = groupId?.ToString() ?? "",
             ["access_token"] = accessToken,
             ["v"] = ApiVersion
         }, cancellationToken);
@@ -477,7 +549,9 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         string? keyboard,
         CancellationToken cancellationToken,
         long? replyToMessageId,
-        long? replyToConversationMessageId)
+        long? replyToConversationMessageId,
+        string? attachment = null,
+        bool disableMentions = false)
     {
         var parameters = new Dictionary<string, string>
         {
@@ -490,6 +564,14 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         if (!string.IsNullOrWhiteSpace(keyboard))
         {
             parameters["keyboard"] = keyboard;
+        }
+        if (!string.IsNullOrWhiteSpace(attachment))
+        {
+            parameters["attachment"] = attachment;
+        }
+        if (disableMentions)
+        {
+            parameters["disable_mentions"] = "1";
         }
 
         if (peerId > 2_000_000_000 && replyToConversationMessageId is > 0)

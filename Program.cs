@@ -75,6 +75,7 @@ using var httpClient = new HttpClient(new SocketsHttpHandler
 };
 var api = new VkApiClient(httpClient, accessToken, groupId);
 var statistics = new BotStatistics();
+var silenceModeCache = new SilenceModeCache();
 var commands = new List<IBotCommand>
 {
     new PingCommand(),
@@ -85,11 +86,13 @@ var commands = new List<IBotCommand>
     new SetRulesCommand(store, adminIds),
     new SetInfoCommand(store, adminIds),
     new SettingsCommand(store, adminIds),
+    new SilenceCommand(store, adminIds, silenceModeCache),
     new SetNicknameCommand(store, adminIds),
     new GetNicknameCommand(store, adminIds),
     new RemoveNicknameCommand(store, adminIds),
     new NicknameListCommand(store, adminIds),
     new ProfileCommand(store, adminIds),
+    new TopCommand(store),
     new ClearCommand(store, adminIds),
     new SilentClearCommand(store, adminIds),
     new WarnCommand(store, adminIds),
@@ -127,7 +130,7 @@ var commands = new List<IBotCommand>
 };
 commands.Add(new HelpCommand(commands));
 var router = new CommandRouter(api, commands, statistics, store);
-var bot = new LongPollBot(api, router, groupId, statistics, store);
+var bot = new LongPollBot(api, router, groupId, statistics, store, adminIds, silenceModeCache);
 using var cancellationTokenSource = new CancellationTokenSource();
 
 Console.CancelKeyPress += (_, eventArgs) =>

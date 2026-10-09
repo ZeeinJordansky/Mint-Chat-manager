@@ -19,7 +19,7 @@ public sealed class HelpCommand(IReadOnlyCollection<IBotCommand> commands) : IBo
     private static readonly HashSet<string> GameCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "/баланс", "/btc", "/купитьbtc", "/продатьbtc", "/банк", "/снятьбанк",
-        "/передать", "/ежедневный"
+        "/передать", "/ежедневный", "/top"
     };
 
     public string Name => "/help";
