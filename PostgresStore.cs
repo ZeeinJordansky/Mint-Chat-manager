@@ -442,6 +442,158 @@ public sealed class PostgresStore(NpgsqlDataSource dataSource)
         return (decimal)(await command.ExecuteScalarAsync(cancellationToken) ?? 0m);
     }
 
+    public async Task<decimal> GetGlobalRoleAsync(
+        long userId,
+        IReadOnlySet<long> administratorIds,
+        CancellationToken cancellationToken)
+    {
+        if (administratorIds.Contains(userId))
+        {
+            return 12;
+        }
+
+        await using var command = dataSource.CreateCommand(
+            "SELECT COALESCE(global_role, 0) FROM user_profiles WHERE user_id = @user_id;");
+        command.Parameters.AddWithValue("user_id", userId);
+        return (decimal)(await command.ExecuteScalarAsync(cancellationToken) ?? 0m);
+    }
+
+    public async Task<IReadOnlyList<ChatStaffMember>> GetGlobalStaffAsync(
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT user_id, global_role
+            FROM user_profiles
+            WHERE global_role BETWEEN 7 AND 12
+            ORDER BY global_role DESC, user_id;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var members = new List<ChatStaffMember>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            members.Add(new ChatStaffMember(reader.GetInt64(0), reader.GetDecimal(1)));
+        }
+
+        return members;
+    }
+
+    public async Task<long> CreateSupportTicketAsync(
+        long userId,
+        string userName,
+        string ticketText,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            INSERT INTO support_tickets (user_id, user_name, ticket_text)
+            VALUES (@user_id, @user_name, @ticket_text)
+            RETURNING ticket_id;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("user_name", userName);
+        command.Parameters.AddWithValue("ticket_text", ticketText);
+        return (long)(await command.ExecuteScalarAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Ticket creation returned no identifier."));
+    }
+
+    public async Task<SupportTicket?> GetSupportTicketAsync(
+        long ticketId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT ticket_id, user_id, user_name, ticket_text, status, agent_id,
+                   close_reason, rated, rating
+            FROM support_tickets
+            WHERE ticket_id = @ticket_id;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("ticket_id", ticketId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? new SupportTicket(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                reader.GetString(6),
+                reader.GetBoolean(7),
+                reader.IsDBNull(8) ? null : reader.GetInt16(8))
+            : null;
+    }
+
+    public async Task<bool> StartSupportTicketAsync(
+        long ticketId,
+        long agentId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE support_tickets
+            SET status = 'considering', agent_id = @agent_id, updated_at = NOW()
+            WHERE ticket_id = @ticket_id AND status = 'open';
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("ticket_id", ticketId);
+        command.Parameters.AddWithValue("agent_id", agentId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task UpdateSupportTicketReplyAsync(
+        long ticketId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            "UPDATE support_tickets SET updated_at = NOW() WHERE ticket_id = @ticket_id AND status <> 'closed';");
+        command.Parameters.AddWithValue("ticket_id", ticketId);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            throw new InvalidOperationException($"Support ticket {ticketId} changed while replying.");
+        }
+    }
+
+    public async Task<bool> CloseSupportTicketAsync(
+        long ticketId,
+        long agentId,
+        decimal role,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE support_tickets
+            SET status = 'closed', close_reason = @reason,
+                agent_id = COALESCE(agent_id, @agent_id), updated_at = NOW()
+            WHERE ticket_id = @ticket_id AND status <> 'closed'
+              AND (agent_id IS NULL OR agent_id = @agent_id OR @role >= 10);
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("ticket_id", ticketId);
+        command.Parameters.AddWithValue("agent_id", agentId);
+        command.Parameters.AddWithValue("role", role);
+        command.Parameters.AddWithValue("reason", reason);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> RateSupportTicketAsync(
+        long ticketId,
+        long userId,
+        short rating,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE support_tickets
+            SET rated = TRUE, rating = @rating, updated_at = NOW()
+            WHERE ticket_id = @ticket_id AND user_id = @user_id
+              AND status = 'closed' AND rated = FALSE;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("ticket_id", ticketId);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("rating", rating);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     public async Task<ChatSettings> GetChatSettingsAsync(long peerId, CancellationToken cancellationToken)
     {
         const string insertSql = "INSERT INTO chat_settings (peer_id) VALUES (@peer_id) ON CONFLICT DO NOTHING;";
@@ -1164,6 +1316,17 @@ public sealed record ChatNickname(
     DateTimeOffset UpdatedAt);
 
 public sealed record ChatNicknamePage(long TotalCount, IReadOnlyList<ChatNickname> Nicknames);
+
+public sealed record SupportTicket(
+    long Id,
+    long UserId,
+    string UserName,
+    string Text,
+    string Status,
+    long? AgentId,
+    string CloseReason,
+    bool Rated,
+    short? Rating);
 
 public sealed record GameLeaderboardEntry(long UserId, long Score);
 

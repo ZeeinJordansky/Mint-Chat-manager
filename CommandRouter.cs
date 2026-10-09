@@ -1,3 +1,5 @@
+using MintChatManager.Optimization;
+
 namespace MintChatManager;
 
 public interface IBotCommand
@@ -114,8 +116,17 @@ public readonly record struct BotCommandContext(
         var messageId = MessageId;
         if (messageId is not > 0 && ConversationMessageId is > 0)
         {
-            messageId = await api.GetMessageIdByConversationMessageIdAsync(
-                PeerId, ConversationMessageId.Value, cancellationToken);
+            try
+            {
+                await api.EditConversationMessageAsync(
+                    PeerId, ConversationMessageId.Value, message, keyboard, cancellationToken);
+                return;
+            }
+            catch (VkApiException)
+            {
+                messageId = await api.GetMessageIdByConversationMessageIdAsync(
+                    PeerId, ConversationMessageId.Value, cancellationToken);
+            }
         }
 
         if (messageId is not > 0)
@@ -133,17 +144,20 @@ public sealed class CommandRouter
     private readonly VkApiClient api;
     private readonly BotStatistics statistics;
     private readonly PostgresStore store;
+    private readonly ForbiddenWordsFilter forbiddenWordsFilter;
     private readonly Dictionary<string, IBotCommand> commands;
 
     public CommandRouter(
         VkApiClient api,
         IEnumerable<IBotCommand> commands,
         BotStatistics statistics,
-        PostgresStore store)
+        PostgresStore store,
+        ForbiddenWordsFilter forbiddenWordsFilter)
     {
         this.api = api;
         this.statistics = statistics;
         this.store = store;
+        this.forbiddenWordsFilter = forbiddenWordsFilter;
         this.commands = new Dictionary<string, IBotCommand>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var command in commands)
@@ -238,6 +252,7 @@ public sealed class CommandRouter
         var commandName = commandText[..commandLength].ToString();
         if (commands.TryGetValue(commandName, out var command))
         {
+            var arguments = separator < 0 ? "" : commandText[(separator + 1)..].TrimStart().ToString();
             Console.WriteLine($"Running {commandName} for peer {peerId}.");
             if (command is IInternalBotCommand && !isCallback)
             {
@@ -263,18 +278,42 @@ public sealed class CommandRouter
                 return;
             }
 
+            if (command.Name != "/ticket" && forbiddenWordsFilter.ContainsForbiddenWord(arguments))
+            {
+                await new BotCommandContext(
+                        peerId, userId, messageId, replyToUserId, replyToConversationMessageId, conversationMessageId,
+                        commandName, isCallback)
+                    .SendMessageAsync(
+                        api,
+                        "В аргументах команды обнаружены запрещённые слова. Попробуйте сформулировать запрос иначе.",
+                        cancellationToken,
+                        disableMentions: true);
+                return;
+            }
+
             statistics.RecordCommand();
             await command.ExecuteAsync(
                 api,
                 new BotCommandContext(
                     peerId, userId, messageId, replyToUserId, replyToConversationMessageId, conversationMessageId,
                     commandName, isCallback),
-                separator < 0 ? "" : commandText[(separator + 1)..].TrimStart().ToString(),
+                arguments,
                 cancellationToken);
         }
         else
         {
             Console.WriteLine($"Unknown command {commandName} from peer {peerId}.");
+            if (isCallback)
+            {
+                await new BotCommandContext(
+                        peerId, userId, messageId, replyToUserId, replyToConversationMessageId, conversationMessageId,
+                        commandName, isCallback)
+                    .SendMessageAsync(
+                        api,
+                        "Эта кнопка больше не поддерживается. Откройте актуальное меню команд: /help.",
+                        cancellationToken,
+                        disableMentions: true);
+            }
         }
     }
 }

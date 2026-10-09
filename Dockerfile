@@ -6,4 +6,5 @@ RUN dotnet publish MintChatManager.csproj --configuration Release --output /app/
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
-ENTRYPOINT ["dotnet", "MintChatManager.dll"]
+COPY scripts/run-bot-supervised.sh /app/run-bot-supervised.sh
+ENTRYPOINT ["/bin/sh", "/app/run-bot-supervised.sh"]

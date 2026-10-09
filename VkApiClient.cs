@@ -18,6 +18,27 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         }, cancellationToken);
     }
 
+    public async Task<bool> IsMessagesFromGroupAllowedAsync(
+        long userId,
+        CancellationToken cancellationToken)
+    {
+        if (groupId is not > 0)
+        {
+            throw new InvalidOperationException("VK group ID is required to check direct-message access.");
+        }
+
+        var response = await CallAsync("messages.isMessagesFromGroupAllowed", new Dictionary<string, string>
+        {
+            ["group_id"] = groupId.Value.ToString(),
+            ["user_id"] = userId.ToString(),
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        }, cancellationToken);
+        return response.TryGetProperty("is_allowed", out var allowed) &&
+               allowed.ValueKind == JsonValueKind.Number &&
+               allowed.GetInt32() == 1;
+    }
+
     public async Task<JsonDocument> GetLongPollResponseAsync(Uri uri, CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync(uri, cancellationToken);
@@ -65,6 +86,78 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         return SendMessageAsync(
             peerId, message, null, cancellationToken, replyToMessageId, replyToConversationMessageId,
             disableMentions: disableMentions);
+    }
+
+    public async Task<long?> SendMessageAndGetIdAsync(
+        long peerId,
+        string message,
+        CancellationToken cancellationToken,
+        long? replyToMessageId = null,
+        long? replyToConversationMessageId = null,
+        bool disableMentions = false)
+    {
+        var parameters = new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["random_id"] = Random.Shared.Next().ToString(),
+            ["message"] = message,
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        };
+        if (disableMentions)
+        {
+            parameters["disable_mentions"] = "1";
+        }
+
+        if (peerId > 2_000_000_000 && replyToConversationMessageId is > 0)
+        {
+            parameters["forward"] = JsonSerializer.Serialize(new
+            {
+                peer_id = peerId,
+                conversation_message_ids = new[] { replyToConversationMessageId.Value },
+                is_reply = true
+            });
+        }
+        else if (peerId <= 2_000_000_000 && replyToMessageId is > 0)
+        {
+            parameters["reply_to"] = replyToMessageId.Value.ToString();
+        }
+
+        var response = await CallAsync("messages.send", parameters, cancellationToken);
+        if (response.ValueKind == JsonValueKind.Number && response.TryGetInt64(out var messageId))
+        {
+            return messageId > 0 ? messageId : null;
+        }
+
+        if (response.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in new[] { "message_id", "id" })
+            {
+                if (response.TryGetProperty(property, out var id) &&
+                    id.TryGetInt64(out messageId) &&
+                    messageId > 0)
+                {
+                    return messageId;
+                }
+            }
+        }
+
+        throw new InvalidOperationException("VK did not return a message ID for the sent message.");
+    }
+
+    public Task DeleteMessageAsync(
+        long peerId,
+        long messageId,
+        CancellationToken cancellationToken)
+    {
+        return CallAsync("messages.delete", new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["message_ids"] = messageId.ToString(),
+            ["delete_for_all"] = "1",
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        }, cancellationToken);
     }
 
     public Task SendMessageWithKeyboardAsync(
@@ -136,6 +229,37 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
         return CallAsync("messages.edit", parameters, cancellationToken);
     }
 
+    public Task EditConversationMessageAsync(
+        long peerId,
+        long conversationMessageId,
+        string message,
+        string? keyboard,
+        CancellationToken cancellationToken,
+        bool disableMentions = false)
+    {
+        var parameters = new Dictionary<string, string>
+        {
+            ["peer_id"] = peerId.ToString(),
+            ["conversation_message_id"] = conversationMessageId.ToString(),
+            ["message"] = message,
+            ["keep_forward_messages"] = "1",
+            ["keep_snippets"] = "0",
+            ["dont_parse_links"] = "1",
+            ["access_token"] = accessToken,
+            ["v"] = ApiVersion
+        };
+        if (keyboard is not null)
+        {
+            parameters["keyboard"] = keyboard;
+        }
+        if (disableMentions)
+        {
+            parameters["disable_mentions"] = "1";
+        }
+
+        return CallAsync("messages.edit", parameters, cancellationToken);
+    }
+
     public async Task<long?> GetMessageIdByConversationMessageIdAsync(
         long peerId,
         long conversationMessageId,
@@ -157,19 +281,24 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
     public Task ChangeConversationMemberRestrictionsAsync(
         long peerId,
         long userId,
-        int durationSeconds,
+        int? durationSeconds,
         string action,
         CancellationToken cancellationToken)
     {
-        return CallAsync("messages.changeConversationMemberRestrictions", new Dictionary<string, string>
+        var parameters = new Dictionary<string, string>
         {
             ["peer_id"] = peerId.ToString(),
             ["member_ids"] = userId.ToString(),
-            ["for"] = durationSeconds.ToString(),
             ["action"] = action,
             ["access_token"] = accessToken,
             ["v"] = ApiVersion
-        }, cancellationToken);
+        };
+        if (durationSeconds is { } duration)
+        {
+            parameters["for"] = duration.ToString();
+        }
+
+        return CallAsync("messages.changeConversationMemberRestrictions", parameters, cancellationToken);
     }
 
     public Task RemoveChatUserAsync(long peerId, long userId, CancellationToken cancellationToken)
@@ -723,11 +852,25 @@ public sealed class VkApiClient(HttpClient httpClient, string accessToken, long?
 
         if (document.RootElement.TryGetProperty("error", out var error))
         {
-            throw new InvalidOperationException($"VK API error: {error}");
+            var errorCode = error.TryGetProperty("error_code", out var code) &&
+                            code.TryGetInt32(out var parsedCode)
+                ? parsedCode
+                : 0;
+            var errorMessage = error.TryGetProperty("error_msg", out var message)
+                ? message.GetString()
+                : null;
+            throw new VkApiException(errorCode, errorMessage ?? "Неизвестная ошибка VK API.");
         }
 
         return document.RootElement.GetProperty("response").Clone();
     }
+}
+
+public sealed class VkApiException(int errorCode, string errorMessage)
+    : Exception($"VK API error {errorCode}: {errorMessage}")
+{
+    public int ErrorCode { get; } = errorCode;
+    public string ErrorMessage { get; } = errorMessage;
 }
 
 public sealed record VkConversationInfo(long PeerId, string Title, int MemberCount, long OwnerId);

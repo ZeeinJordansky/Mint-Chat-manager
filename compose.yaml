@@ -20,6 +20,7 @@ services:
     build: .
     restart: unless-stopped
     init: true
+    stop_grace_period: 45s
     env_file:
       - Configuration/.env
     environment:

@@ -87,8 +87,8 @@ public sealed class TopCommand(PostgresStore store) : IBotCommand
     {
         var buttons = Categories
             .Where(category => category.Key != selected)
-            .Select(category => new[]
-            {
+            .Chunk(2)
+            .Select(row => row.Select(category =>
                 new
                 {
                     action = new
@@ -98,8 +98,7 @@ public sealed class TopCommand(PostgresStore store) : IBotCommand
                         payload = new { command = $"/top {category.Key}" }
                     },
                     color = "secondary"
-                }
-            })
+                }).ToArray())
             .Append(new[]
             {
                 new

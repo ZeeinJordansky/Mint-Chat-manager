@@ -116,26 +116,7 @@ public sealed class LongPollBot(
             {
                 try
                 {
-                    if (update.EventId is not null)
-                    {
-                        try
-                        {
-                            await api.AnswerMessageEventAsync(
-                                update.PeerId,
-                                update.UserId,
-                                update.EventId,
-                                cancellationToken);
-                        }
-                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                        {
-                            return;
-                        }
-                        catch (Exception exception)
-                        {
-                            Console.Error.WriteLine($"Failed to acknowledge VK button event: {exception.Message}");
-                        }
-                    }
-                    else
+                    if (update.EventId is null)
                     {
                         if (ModerationCommandAccess.IsConversation(update.PeerId))
                         {
@@ -193,6 +174,27 @@ public sealed class LongPollBot(
                         update.EventId is not null,
                         update.Text,
                         cancellationToken);
+
+                    if (update.EventId is not null)
+                    {
+                        try
+                        {
+                            await api.AnswerMessageEventAsync(
+                                update.PeerId,
+                                update.UserId,
+                                update.EventId,
+                                cancellationToken);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+                        catch (Exception exception)
+                        {
+                            Console.Error.WriteLine(
+                                $"Failed to acknowledge VK button event after processing: {exception}");
+                        }
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -200,7 +202,8 @@ public sealed class LongPollBot(
                 }
                 catch (Exception exception)
                 {
-                    Console.Error.WriteLine($"Failed to handle VK update: {exception.Message}");
+                    var errorId = Guid.NewGuid().ToString("N")[..8];
+                    Console.Error.WriteLine($"Failed to handle VK update {errorId}: {exception}");
                     if (cancellationToken.IsCancellationRequested)
                     {
                         return;
@@ -208,15 +211,37 @@ public sealed class LongPollBot(
 
                     try
                     {
+                        if (update.EventId is not null)
+                        {
+                            var toast = exception is VkApiException vkException
+                                ? $"VK: {vkException.ErrorMessage} ({vkException.ErrorCode})"
+                                : $"Ошибка команды. Код: {errorId}";
+                            if (toast.Length > 90)
+                            {
+                                toast = toast[..90];
+                            }
+
+                            await api.AnswerMessageEventAsync(
+                                update.PeerId,
+                                update.UserId,
+                                update.EventId,
+                                cancellationToken,
+                                toast);
+                            continue;
+                        }
+
+                        var errorMessage = exception is VkApiException apiException
+                            ? $"⚠️ VK не выполнил операцию: {apiException.ErrorMessage} (код {apiException.ErrorCode})."
+                            : $"⚠️ Не удалось выполнить команду. Ошибка зарегистрирована под кодом {errorId}.";
                         await api.SendMessageAsync(
                             update.PeerId,
-                            "⚠️ Не удалось выполнить команду. Проверьте правильность команды и попробуйте позже.",
+                            errorMessage,
                             cancellationToken,
                             replyToConversationMessageId: update.ConversationMessageId);
                     }
                     catch (Exception sendException)
                     {
-                        Console.Error.WriteLine($"Failed to notify about command error: {sendException.Message}");
+                        Console.Error.WriteLine($"Failed to notify about command error: {sendException}");
                     }
                 }
             }
@@ -313,11 +338,18 @@ public sealed class LongPollBot(
             replyToConversationMessageId = parsedForwardedCmid;
         }
 
+        var messageText = text.GetString() ?? "";
+        if (payload.TryGetProperty("payload", out var messagePayload) &&
+            TryGetPayloadCommand(messagePayload, out var payloadCommand))
+        {
+            messageText = payloadCommand;
+        }
+
         return new BotUpdate(
             peerId.GetInt64(),
             userId.GetInt64(),
             messageId,
-            text.GetString() ?? "",
+            messageText,
             replyToUserId,
             replyToConversationMessageId,
             conversationMessageId);
@@ -330,11 +362,9 @@ public sealed class LongPollBot(
             !payload.TryGetProperty("user_id", out var userId) || userId.ValueKind != JsonValueKind.Number ||
             !payload.TryGetProperty("event_id", out var eventId) || eventId.ValueKind != JsonValueKind.String ||
             !payload.TryGetProperty("payload", out var buttonPayload) ||
-            buttonPayload.ValueKind != JsonValueKind.Object ||
-            !buttonPayload.TryGetProperty("command", out var command) ||
-            command.ValueKind != JsonValueKind.String)
+            !TryGetPayloadCommand(buttonPayload, out var command))
         {
-            Console.Error.WriteLine("Received message_event without peer_id, user_id, event_id or command payload.");
+            Console.Error.WriteLine("Received message_event without a valid peer_id, user_id, event_id or command payload.");
             return null;
         }
 
@@ -355,9 +385,108 @@ public sealed class LongPollBot(
             peerId.GetInt64(),
             userId.GetInt64(),
             messageId,
-            command.GetString() ?? "",
+            command,
             ConversationMessageId: conversationMessageId,
             EventId: eventId.GetString());
+    }
+
+    private static bool TryGetPayloadCommand(JsonElement payload, out string command)
+    {
+        command = "";
+        JsonDocument? parsedPayload = null;
+        try
+        {
+            if (payload.ValueKind == JsonValueKind.String)
+            {
+                var rawPayload = payload.GetString();
+                if (string.IsNullOrWhiteSpace(rawPayload))
+                {
+                    return false;
+                }
+
+                if (rawPayload.TrimStart().StartsWith('{'))
+                {
+                    parsedPayload = JsonDocument.Parse(rawPayload);
+                    payload = parsedPayload.RootElement;
+                }
+                else
+                {
+                    command = NormalizePayloadCommand(rawPayload, null);
+                    return command.Length > 0;
+                }
+            }
+
+            if (payload.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var commandProperty = payload.TryGetProperty("command", out var value) &&
+                                  value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : payload.TryGetProperty("cmd", out value) && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+            if (string.IsNullOrWhiteSpace(commandProperty))
+            {
+                return false;
+            }
+
+            var arguments = new List<string>();
+            if (payload.TryGetProperty("stake", out var stake))
+            {
+                arguments.Add(stake.ValueKind == JsonValueKind.String ? stake.GetString() ?? "" : stake.ToString());
+            }
+            else if (commandProperty.StartsWith("stats_", StringComparison.Ordinal) &&
+                     payload.TryGetProperty("targetId", out var targetId) &&
+                     targetId.ValueKind == JsonValueKind.Number)
+            {
+                arguments.Add(targetId.ToString());
+            }
+            else if (commandProperty.StartsWith("ticket_", StringComparison.Ordinal) &&
+                     payload.TryGetProperty("tId", out var ticketId) &&
+                     ticketId.ValueKind == JsonValueKind.Number)
+            {
+                arguments.Add(ticketId.ToString());
+                if (payload.TryGetProperty("stars", out var stars) && stars.ValueKind == JsonValueKind.Number)
+                {
+                    arguments.Add(stars.ToString());
+                }
+            }
+
+            command = NormalizePayloadCommand(commandProperty, string.Join(' ', arguments));
+            return command.Length > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        finally
+        {
+            parsedPayload?.Dispose();
+        }
+    }
+
+    private static string NormalizePayloadCommand(string rawCommand, string? argument)
+    {
+        var command = rawCommand.Trim();
+        if (command.Length == 0)
+        {
+            return "";
+        }
+
+        if (!command.StartsWith('/'))
+        {
+            command = command switch
+            {
+                "stats_main" => "/stats",
+                "stats_activity" => "/stats activity",
+                "stats_game" => "/stats game",
+                _ => "/" + command
+            };
+        }
+
+        return string.IsNullOrWhiteSpace(argument) ? command : $"{command} {argument.Trim()}";
     }
 }
 

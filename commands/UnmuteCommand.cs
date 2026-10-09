@@ -49,7 +49,8 @@ public sealed class UnmuteCommand(PostgresStore store, IReadOnlySet<long> admini
             return;
         }
 
-        await api.ChangeConversationMemberRestrictionsAsync(context.PeerId, targetId.Value, 0, "rw", cancellationToken);
+        await api.ChangeConversationMemberRestrictionsAsync(
+            context.PeerId, targetId.Value, null, "rw", cancellationToken);
         await store.ClearModerationActionAsync(context.PeerId, targetId.Value, "mute", cancellationToken);
         await context.SendMessageAsync(
             api,

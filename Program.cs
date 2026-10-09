@@ -7,7 +7,20 @@ LoadDotEnv();
 
 var accessToken = Environment.GetEnvironmentVariable("VK_ACCESS_TOKEN");
 var groupIdValue = Environment.GetEnvironmentVariable("VK_GROUP_ID") ?? "232664735";
+var supportChatPeerIdValue = Environment.GetEnvironmentVariable("SUPPORT_CHAT_PEER_ID");
 var postgresPassword = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD");
+long? supportChatPeerId = null;
+if (!string.IsNullOrWhiteSpace(supportChatPeerIdValue))
+{
+    if (!long.TryParse(supportChatPeerIdValue, out var parsedSupportPeerId) ||
+        parsedSupportPeerId <= 2_000_000_000)
+    {
+        Console.Error.WriteLine("SUPPORT_CHAT_PEER_ID must be a valid conversation peer ID.");
+        return 1;
+    }
+
+    supportChatPeerId = parsedSupportPeerId;
+}
 
 if (string.IsNullOrWhiteSpace(accessToken) ||
     string.IsNullOrWhiteSpace(postgresPassword) ||
@@ -80,6 +93,12 @@ var commands = new List<IBotCommand>
 {
     new PingCommand(),
     new IdCommand(),
+    new TicketCommand(store, supportChatPeerId, adminIds),
+    new AnswerTicketCommand(store, adminIds),
+    new CloseTicketCommand(store, adminIds),
+    new TicketConsiderCommand(store, adminIds),
+    new TicketRateCommand(store, supportChatPeerId, adminIds),
+    new ManagerStaffCommand(store, adminIds),
     new StartCommand(store, adminIds),
     new RulesCommand(store),
     new InfoCommand(store),
@@ -129,7 +148,15 @@ var commands = new List<IBotCommand>
     new ClaimDailyBonusCommand(store)
 };
 commands.Add(new HelpCommand(commands));
-var router = new CommandRouter(api, commands, statistics, store);
+var forbiddenWordsPath = Path.Combine(AppContext.BaseDirectory, "Configuration", "forbidden-words.json");
+if (!File.Exists(forbiddenWordsPath))
+{
+    forbiddenWordsPath = Path.Combine(
+        Directory.GetCurrentDirectory(), "Configuration", "forbidden-words.json");
+}
+
+var forbiddenWordsFilter = ForbiddenWordsFilter.Load(forbiddenWordsPath);
+var router = new CommandRouter(api, commands, statistics, store, forbiddenWordsFilter);
 var bot = new LongPollBot(api, router, groupId, statistics, store, adminIds, silenceModeCache);
 using var cancellationTokenSource = new CancellationTokenSource();
 

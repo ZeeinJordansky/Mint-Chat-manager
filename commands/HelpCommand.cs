@@ -25,7 +25,7 @@ public sealed class HelpCommand(IReadOnlyCollection<IBotCommand> commands) : IBo
     public string Name => "/help";
     public string Description => "Показать список команд";
     public IReadOnlyCollection<string> Aliases =>
-        new[] { "/помощь", "/хелп", "/команды", "/меню", "/cmd", "/cmds" };
+        new[] { "/помощь", "/хелп", "/команды", "/меню", "/cmd", "/cmds", "/gamehelp" };
 
     public Task ExecuteAsync(
         VkApiClient api,
@@ -37,7 +37,7 @@ public sealed class HelpCommand(IReadOnlyCollection<IBotCommand> commands) : IBo
         var selected = Categories.FirstOrDefault(category => category.Key == page);
         var message = selected is null ? RenderMainPage() : RenderCategory(selected);
         var keyboard = CreateKeyboard(selected is null ? MainButtons() : CategoryButtons(selected));
-        return context.IsCallback && context.MessageId is > 0
+        return context.IsCallback
             ? context.EditMessageAsync(api, message, keyboard, cancellationToken)
             : context.SendMessageWithKeyboardAsync(api, message, keyboard, cancellationToken);
     }
@@ -101,11 +101,19 @@ public sealed class HelpCommand(IReadOnlyCollection<IBotCommand> commands) : IBo
         ["Игровые команды"]
     ];
 
-    private string[][] CategoryButtons(HelpCategory selected) =>
-        Categories.Where(category => category != selected)
-            .Select(category => new[] { category.Title })
-            .Append(new[] { "Главное меню" })
+    private string[][] CategoryButtons(HelpCategory selected)
+    {
+        var titles = Categories
+            .Where(category => category != selected)
+            .Select(category => category.Title)
             .ToArray();
+        var rows = titles
+            .Chunk(2)
+            .Select(row => row.ToArray())
+            .ToList();
+        rows.Add(["Главное меню"]);
+        return rows.ToArray();
+    }
 
     private sealed record HelpCategory(string Key, string Title, decimal? MinimumRole);
 }
